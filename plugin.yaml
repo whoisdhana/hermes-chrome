@@ -1,0 +1,26 @@
+name: hermes-chrome
+version: 0.4.0
+description: Let the agent use your real Chrome (visible cursor, its own tab group, human handoff) via the Hermes Chrome extension. Pair with /chrome pair.
+author: Dhana
+provides_tools:
+  - chrome_status
+  - chrome_tabs
+  - chrome_open
+  - chrome_close
+  - chrome_navigate
+  - chrome_read_page
+  - chrome_find
+  - chrome_text
+  - chrome_screenshot
+  - chrome_click
+  - chrome_type
+  - chrome_key
+  - chrome_scroll
+  - chrome_wait
+  - chrome_handoff
+  - chrome_eval
+  - chrome_plan
+  - chrome_report
+  - chrome_replay
+provides_hooks:
+  - pre_llm_call

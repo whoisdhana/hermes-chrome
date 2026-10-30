@@ -1,0 +1,52 @@
+# Security and data
+
+Hermes Chrome lets an AI agent control your real browser, with your logins. Read this before you install it.
+
+## What the agent can do
+
+Once paired, your Hermes agent can open tabs, read pages, click, type and take screenshots **in the tabs of its own tab group**. It does not see or touch your other tabs unless you share one from the side panel (**Use this tab**). Anything you can do on a site where you are logged in, the agent can do too.
+
+Guard rails you control (extension **Settings**):
+
+- **Blocked sites**: hosts the agent refuses to open or act on (put your bank, email admin, cloud consoles here). No snapshots are taken on them either.
+- **Ask me before risky clicks** (on by default): pay, buy, delete, send, publish, post and similar need your Allow.
+- **Run JavaScript in pages** (off by default).
+- **Stop agent** (right-click the toolbar icon) disconnects immediately; clicking or typing in the agent's tab pauses it.
+- The agent never solves CAPTCHAs; it hands them to you.
+
+## Where data lives
+
+| Data | Where | Leaves your machine? |
+|---|---|---|
+| Pairing: device id and key | Extension storage (`chrome.storage.local`) | Only to your own Hermes when connecting |
+| Device key on the Hermes side | Plugin state, **SHA-256 hash only** | No |
+| Side-panel chat transcript | Extension storage, last 200 messages; **New chat** clears it | Messages go to your Hermes, which sends them to the model provider you configured |
+| Activity snapshots (small JPEGs of each step) | Extension storage, last 60 steps; **Clear timeline** removes them | Only the end-of-task report: up to 3 snapshots to the Telegram chat you talk to the agent in |
+| Files you attach in the side panel | Saved on the Hermes machine (plugin data folder) | To the model provider if the agent reads them |
+| Recorded workflows (Teach) | On the Hermes machine as skills (`skills/browser-recordings/`) | No |
+| Page content the agent reads | Not stored by this project | Sent to your model provider as part of the conversation, like any other tool output |
+
+What a recording never contains: passwords, card numbers, CVV, IBAN, SSN, account numbers or one-time codes. Those fields are detected (input type, autocomplete hints, field names and labels) and stored as blanks; on replay the agent clicks into the field and asks you to type it. Detection is best effort: check the steps in the review screen before saving, and use **Ask for this each time** for anything personal.
+
+## Network
+
+- The extension connects **out** to your Hermes plugin (`ws://<host>:8798/ext`). Nothing listens on your laptop.
+- Use it on the same machine, a LAN, or a private network such as Tailscale. **Do not expose port 8798 to the internet.** The connection is not TLS-encrypted, so it relies on that private network.
+- Credentials never go in URLs: the pairing code and device key are sent inside the WebSocket after it opens.
+- Pairing codes are single use, expire after 5 minutes, and five wrong attempts cancel all open codes. On Telegram the message with the code deletes itself after 5 minutes.
+- The plugin's internal RPC and the bridge's `/mcp` endpoint accept loopback (same machine) callers only.
+- Side-panel chat uses your Hermes API server on the same machine; its key is read on the server and never sent to the browser.
+
+## No telemetry
+
+This project sends no analytics, crash reports or usage data anywhere. The only network traffic is between your browser and your own Hermes, and whatever your Hermes already does (model provider, Telegram).
+
+## Revoking access
+
+- `/chrome devices` lists paired browsers; `/chrome revoke <name>` (or `all`) cuts one off immediately.
+- **Unpair this browser** in the extension Settings forgets the key on that side.
+- Disabling the plugin (`hermes plugins disable hermes-chrome`) closes everything.
+
+## Reporting a vulnerability
+
+Please do not open a public issue for security problems. Use GitHub's private reporting: **Security** tab → **Report a vulnerability** on this repository. Include steps to reproduce and the versions of the extension, plugin and Hermes.

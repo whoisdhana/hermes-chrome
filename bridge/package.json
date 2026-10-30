@@ -1,0 +1,18 @@
+{
+  "name": "hermes-chrome-bridge",
+  "version": "0.4.0",
+  "description": "MCP server that lets an AI agent drive a real Chrome through the Hermes Chrome extension",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "hermes-chrome-bridge": "src/server.mjs" },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "ws": "8.22.0",
+    "zod": "^3.25.0"
+  }
+}

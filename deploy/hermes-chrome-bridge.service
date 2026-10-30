@@ -1,0 +1,18 @@
+# systemd --user unit. Install:
+#   mkdir -p ~/.config/hermes-chrome && chmod 700 ~/.config/hermes-chrome
+#   printf 'HC_HOST=127.0.0.1,<tailscale-ip>\n' > ~/.config/hermes-chrome/env
+#   chmod 600 ~/.config/hermes-chrome/env
+#   cp deploy/hermes-chrome-bridge.service ~/.config/systemd/user/ && systemctl --user enable --now hermes-chrome-bridge
+[Unit]
+Description=Hermes Chrome bridge (MCP <-> Chrome extension)
+After=network-online.target tailscaled.service
+
+[Service]
+EnvironmentFile=%h/.config/hermes-chrome/env
+WorkingDirectory=%h/apps/hermes-chrome/bridge
+ExecStart=/usr/bin/env node src/server.mjs
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

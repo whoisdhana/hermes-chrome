@@ -1,0 +1,138 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hermes Chrome chat</title>
+  <style>
+    :root {
+      --bg: #FBF7F2; --panel: #FFFDFA; --text: #1C1917; --muted: #78716C; --line: #E7E5E4;
+      --accent: #BA583D; --accent-ink: #FBF1E6; --user: #F5E6DA; --chip: #F5F5F4; --err: #DC2626; --hover: #F5F5F4;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #1C1917; --panel: #292524; --text: #FAFAF9; --muted: #A8A29E; --line: #44403C;
+        --user: #4A2A20; --chip: #292524; --hover: #3A3532; }
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { height: 100%; margin: 0; }
+    body { display: flex; flex-direction: column; background: var(--bg); color: var(--text);
+      font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", sans-serif; }
+    header { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; border-bottom: 1px solid var(--line); }
+    header h1 { margin: 0; font-size: 14px; white-space: nowrap; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+    .dot.on { background: #16A34A; }
+    #model { flex: 1; min-width: 0; font: inherit; font-size: 12px; color: var(--muted); background: transparent;
+      border: 1px solid transparent; border-radius: 7px; padding: 3px 4px; cursor: pointer; text-overflow: ellipsis; }
+    #model:hover, #model:focus { border-color: var(--line); color: var(--text); outline: none; }
+    button { font: inherit; cursor: pointer; border: 0; border-radius: 8px; }
+    .ghost { background: transparent; color: var(--muted); padding: 4px 8px; font-size: 12.5px; white-space: nowrap; }
+    .ghost:hover { color: var(--text); background: var(--hover); }
+    #log { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+    .empty { margin: auto; text-align: center; color: var(--muted); max-width: 250px; font-size: 13px; }
+    .msg { max-width: 100%; overflow-wrap: anywhere; }
+    .user { align-self: flex-end; background: var(--user); padding: 8px 12px; border-radius: 14px 14px 4px 14px; max-width: 88%; white-space: pre-wrap; }
+    .user .att { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .assistant a { color: inherit; text-decoration: underline; text-decoration-color: var(--accent); }
+    .assistant code { background: var(--chip); padding: 1px 5px; border-radius: 5px; font-size: 12.5px; }
+    .tool { align-self: flex-start; display: flex; gap: 6px; align-items: baseline; font-size: 12.5px; color: var(--muted);
+      background: var(--chip); border: 1px solid var(--line); padding: 3px 9px; border-radius: 999px; max-width: 100%; }
+    .tool span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .note { font-size: 12.5px; color: var(--muted); font-style: italic; white-space: pre-wrap; }
+    .error { font-size: 13px; color: var(--err); }
+    .working { font-size: 12.5px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+    .working i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite; }
+    .working i:nth-child(2) { animation-delay: .15s; } .working i:nth-child(3) { animation-delay: .3s; }
+    @keyframes pulse { 50% { opacity: .25; } }
+    footer { position: relative; border-top: 1px solid var(--line); padding: 8px 10px 10px; display: grid; gap: 6px; background: var(--panel); }
+    footer.drop { outline: 2px dashed var(--accent); outline-offset: -4px; }
+    #atts { display: flex; flex-wrap: wrap; gap: 6px; }
+    #atts:empty { display: none; }
+    .att-chip { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 4px 3px 3px; border: 1px solid var(--line);
+      border-radius: 8px; background: var(--bg); font-size: 12px; }
+    .att-chip img { width: 30px; height: 30px; object-fit: cover; border-radius: 5px; }
+    .att-chip .ico { width: 30px; height: 30px; display: grid; place-items: center; background: var(--chip); border-radius: 5px; }
+    .att-chip span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+    .att-chip button { background: transparent; color: var(--muted); padding: 0 4px; font-size: 14px; }
+    textarea { width: 100%; resize: none; min-height: 42px; max-height: 160px; padding: 9px 11px; border-radius: 10px;
+      border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
+    textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+    .row { display: flex; align-items: center; gap: 4px; }
+    .icon { background: transparent; color: var(--muted); padding: 5px 7px; font-size: 15px; line-height: 1; }
+    .icon:hover { background: var(--hover); color: var(--text); }
+    .row label { flex: 1; font-size: 12px; color: var(--muted); display: flex; gap: 5px; align-items: center; margin-left: 4px; white-space: nowrap; }
+    #send { background: var(--accent); color: var(--accent-ink); font-weight: 700; padding: 6px 15px; }
+    #send.stop { background: var(--err); color: #FFF; }
+    #menu { position: absolute; left: 10px; right: 10px; bottom: calc(100% - 4px); max-height: 260px; overflow-y: auto;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 4px; }
+    #menu[hidden] { display: none; }
+    .item { display: grid; padding: 6px 9px; border-radius: 7px; cursor: pointer; }
+    .item b { font-size: 13px; font-weight: 600; }
+    .item small { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .item.sel, .item:hover { background: var(--hover); }
+    .item .kind { color: var(--accent); font-weight: 600; }
+    nav { display: flex; gap: 2px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+    nav button { background: transparent; color: var(--muted); padding: 7px 10px 8px; border-radius: 0; font-size: 12.5px; font-weight: 600;
+      border-bottom: 2px solid transparent; }
+    nav button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+    #pauseBtn { background: var(--chip); color: var(--text); padding: 3px 9px; font-size: 12px; }
+    #pauseBtn.paused { background: var(--accent); color: var(--accent-ink); }
+    .view { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+    .view[hidden] { display: none; }
+    .runhead { font-size: 11.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-top: 4px; }
+    .act { display: grid; grid-template-columns: 96px 1fr; gap: 10px; align-items: center; }
+    .act img { width: 96px; height: 60px; object-fit: cover; object-position: top; border-radius: 6px; border: 1px solid var(--line); cursor: zoom-in; }
+    .act .ph { width: 96px; height: 60px; border-radius: 6px; background: var(--chip); display: grid; place-items: center; font-size: 18px; }
+    .act b { display: block; font-size: 13px; font-weight: 600; }
+    .act small { color: var(--muted); font-size: 11.5px; }
+    #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.75); display: grid; place-items: center; padding: 12px; cursor: zoom-out; }
+    #lightbox[hidden] { display: none; }
+    #lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px; }
+    .card { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 14px; display: grid; gap: 10px; }
+    .card p { margin: 0; color: var(--muted); font-size: 13px; }
+    .big { background: var(--accent); color: var(--accent-ink); font-weight: 700; padding: 9px 14px; justify-self: start; }
+    .big.stop { background: var(--err); color: #FFF; }
+    .quietbtn { background: var(--chip); color: var(--text); padding: 8px 12px; }
+    .steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; counter-reset: s; }
+    .steps li { counter-increment: s; display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: start; font-size: 13px;
+      padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+    .steps li::before { content: counter(s); color: var(--muted); font-size: 11.5px; font-weight: 700; padding-top: 1px; }
+    .steps .var { grid-column: 2 / 4; font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+    .steps .del { background: transparent; color: var(--muted); padding: 0 4px; font-size: 15px; }
+    .field { display: grid; gap: 4px; font-size: 12.5px; font-weight: 600; }
+    .field input { font: inherit; font-weight: 400; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+    .rec-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--err); margin-right: 6px; animation: pulse 1.2s infinite; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="dot" id="dot"></span>
+    <h1 id="title">Hermes</h1>
+    <select id="model" title="Model for this chat"><option value="">Default model</option></select>
+    <button id="pauseBtn" type="button" hidden title="Pause or resume (⌥⇧.)">⏸ Pause</button>
+    <button class="ghost" id="new" type="button">New chat</button>
+  </header>
+  <nav role="tablist">
+    <button role="tab" data-view="log" aria-selected="true" type="button">Chat</button>
+    <button role="tab" data-view="activity" aria-selected="false" type="button">Activity</button>
+    <button role="tab" data-view="teach" aria-selected="false" type="button">Teach</button>
+  </nav>
+  <div id="log" class="view" aria-live="polite"></div>
+  <div id="activity" class="view" hidden></div>
+  <div id="teach" class="view" hidden></div>
+  <div id="lightbox" hidden><img alt=""></div>
+  <footer id="composer">
+    <div id="menu" role="listbox" hidden></div>
+    <div id="atts"></div>
+    <textarea id="input" rows="1" placeholder="Ask your agent to do something in the browser…"></textarea>
+    <div class="row">
+      <button class="icon" id="attach" type="button" title="Attach files or images">📎</button>
+      <button class="icon" id="shot" type="button" title="Attach a screenshot of this tab">📸</button>
+      <input id="file" type="file" multiple hidden>
+      <label><input id="useTab" type="checkbox" checked> Use this tab</label>
+      <button id="send" type="button">Send</button>
+    </div>
+  </footer>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

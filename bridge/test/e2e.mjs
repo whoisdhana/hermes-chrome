@@ -1,0 +1,388 @@
+// End-to-end: bridge + real extension in a throwaway Chromium + MCP client.
+// Run: npm i --no-save playwright && npx playwright install chromium && node test/e2e.mjs
+import { spawn } from 'node:child_process';
+import http from 'node:http';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import assert from 'node:assert/strict';
+import { chromium } from 'playwright';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const EXT = path.resolve(here, '../../extension');
+const PORT = 8799, PAGE_PORT = 8800;
+const SHOTS = process.env.HC_SHOTS || os.tmpdir();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const PAGE = `<!doctype html><title>HC test</title>
+<body style="font:16px sans-serif;padding:40px">
+<h1>Sign up</h1>
+<label for="n">Full name</label> <input id="n" placeholder="Your name"><br><br>
+<button id="go" onclick="document.getElementById('out').textContent='Hello '+document.getElementById('n').value">Continue</button>
+<button onclick="document.getElementById('out').textContent='DELETED'">Delete account</button>
+<p id="out"></p><div style="height:2000px"></div><a href="/two">Next page</a></body>`;
+const pageServer = http.createServer((req, res) => {
+  res.writeHead(200, { 'content-type': 'text/html' });
+  res.end(req.url === '/two' ? '<title>Two</title><h1>Page two</h1>' : PAGE);
+}).listen(PAGE_PORT);
+
+// Mock Hermes API server: streams one tool call and a short answer for /v1/responses.
+const HERMES_PORT = 8801;
+const hermesRequests = [];
+const sse = (ev) => `event: ${ev.type}\ndata: ${JSON.stringify(ev)}\n\n`;
+const hermesMock = http.createServer(async (req, res) => {
+  if (req.url.startsWith('/api/model/options')) {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ model: 'claude-opus-5-5', provider: 'anthropic', providers: [
+      { slug: 'anthropic', name: 'Anthropic', authenticated: true, models: ['claude-opus-5-5', 'claude-sonnet-5-5'] },
+      { slug: 'openrouter', name: 'OpenRouter', authenticated: false, models: [] }] }));
+  }
+  let body = '';
+  for await (const c of req) body += c;
+  hermesRequests.push({ auth: req.headers.authorization, body: JSON.parse(body) });
+  if (body.includes('SLOW')) await sleep(6000); // lets a test drop the connection mid-reply
+  res.writeHead(200, { 'content-type': 'text/event-stream' });
+  res.write(sse({ type: 'response.output_item.added', item: { id: 'c1', type: 'message', phase: 'commentary' } }));
+  res.write(sse({ type: 'response.output_item.done', item: { id: 'c1', type: 'message', phase: 'commentary', content: [{ type: 'output_text', text: 'Checking the page' }] } }));
+  res.write(sse({ type: 'response.output_item.done', item: { type: 'function_call', name: 'mcp__hermes_chrome__read_page', arguments: '{}' } }));
+  for (const d of ['Hello ', 'from **mock**']) {
+    await sleep(100);
+    res.write(sse({ type: 'response.output_text.delta', item_id: 'm1', delta: d }));
+  }
+  res.end(sse({ type: 'response.completed', response: {} }));
+}).listen(HERMES_PORT);
+
+const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-state-'));
+const bridge = spawn(process.execPath, [path.resolve(here, '../src/server.mjs')], {
+  env: { ...process.env, HC_PORT: String(PORT), HC_UNAVAILABLE_MESSAGE: 'MacBook not available', HC_AGENT_NAME: 'Delulu',
+    HC_STATE_DIR: stateDir, HC_HERMES_URL: `http://127.0.0.1:${HERMES_PORT}`, HC_HERMES_KEY: 'mock-key' },
+  stdio: ['ignore', 'inherit', 'inherit'],
+});
+const newCode = () => fetch(`http://127.0.0.1:${PORT}/pair`, { method: 'POST' }).then((r) => r.json()).then((j) => j.code);
+
+const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-e2e-'));
+let ctx, mcp, failed = false;
+const results = [];
+const step = async (name, fn) => {
+  try { await fn(); results.push(`ok   ${name}`); }
+  catch (e) { failed = true; results.push(`FAIL ${name}: ${e.message}`); }
+  if (process.env.HC_PROGRESS) console.error(results.at(-1));
+  if (process.env.HC_PROGRESS && results.at(-1).startsWith('FAIL') && globalThis.__sw) {
+    console.error('STATE', JSON.stringify(await globalThis.__sw.evaluate(() => ({ paused: hud.paused, reason: hud.pausedReason, busy, waiters: pauseWaiters.length, halt: haltUntil - Date.now(), last: lastTabId }))));
+    if (process.env.HC_STOP_ON_FAIL) process.exit(1);
+  }
+};
+
+try {
+  await sleep(500);
+  ctx = await chromium.launchPersistentContext(userData, {
+    headless: true, channel: 'chromium', viewport: { width: 1100, height: 760 },
+    args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
+  });
+  const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
+  globalThis.__sw = sw;
+  const extId = new URL(sw.url()).host;
+  const health = () => fetch(`http://127.0.0.1:${PORT}/health`).then((r) => r.json());
+
+  const options = await ctx.newPage();
+  await options.goto(`chrome-extension://${extId}/options.html`);
+  const pairWith = async (code) => {
+    await options.fill('#code', code);
+    await options.click('#pair');
+    await options.waitForFunction(() => !/Pairing…/.test(document.querySelector('#pairStatus').textContent), null, { timeout: 10_000 });
+    return options.textContent('#pairStatus');
+  };
+
+  await step('wrong pairing code is refused', async () => {
+    await newCode();
+    assert.match(await pairWith('HC-2222-2222@127.0.0.1:8799'), /wrong or expired/);
+    assert.equal((await health()).extension, false);
+  });
+  let firstCode;
+  await step('pairing code connects the browser', async () => {
+    firstCode = await newCode();
+    assert.match(firstCode, /^HC-[A-Z2-9]{4}-[A-Z2-9]{4}@127\.0\.0\.1:8799$/);
+    await options.fill('#deviceName', 'Work MacBook');
+    await options.click('#saveName');
+    await pairWith(firstCode);
+    for (let i = 0; i < 40 && !(await health()).extension; i++) await sleep(250);
+    assert.equal((await health()).extension, true);
+    const devices = JSON.parse(fs.readFileSync(path.join(stateDir, 'devices.json'), 'utf8'));
+    const [dev] = Object.values(devices);
+    assert.match(dev.key_sha256, /^[0-9a-f]{64}$/, 'only a hash of the device key is stored');
+    assert.equal(dev.name, 'Work MacBook');
+    // rename while paired: saved name reaches the server on the reconnect it triggers
+    await options.fill('#deviceName', 'Work Chrome');
+    await options.click('#saveName');
+    const named = () => Object.values(JSON.parse(fs.readFileSync(path.join(stateDir, 'devices.json'), 'utf8')))[0].name;
+    for (let i = 0; i < 40 && named() !== 'Work Chrome'; i++) await sleep(250);
+    assert.equal(named(), 'Work Chrome');
+    for (let i = 0; i < 40 && !(await health()).extension; i++) await sleep(250);
+    assert.equal(await sw.evaluate(() => chrome.storage.local.get('agentName').then((s) => s.agentName)), 'Delulu');
+  });
+  await step('a pairing code works only once', async () => {
+    const { WebSocket } = await import('ws');
+    const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ext`);
+    await new Promise((r) => sock.on('open', r));
+    sock.send(JSON.stringify({ type: 'pair', code: firstCode }));
+    const reply = await new Promise((r) => sock.on('message', (m) => r(JSON.parse(m))));
+    assert.equal(reply.type, 'pair_failed');
+  });
+  await options.close();
+
+  mcp = new Client({ name: 'e2e', version: '0' });
+  await mcp.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${PORT}/mcp`)));
+  const call = async (name, args = {}) => {
+    const r = await mcp.callTool({ name, arguments: args });
+    const text = r.content.filter((c) => c.type === 'text').map((c) => c.text).join('\n');
+    if (r.isError) throw new Error(`${name}: ${text}`);
+    return { text, content: r.content };
+  };
+  const refOf = (outline, re) => outline.split('\n').find((l) => re.test(l))?.split(' ')[0];
+
+  await step('unknown device cannot take over the connection', async () => {
+    const { WebSocket } = await import('ws');
+    const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ext`);
+    await new Promise((r) => sock.on('open', r));
+    sock.send(JSON.stringify({ type: 'hello', deviceId: 'nope', deviceKey: 'wrong' }));
+    const code = await new Promise((r) => sock.on('close', (c) => r(c)));
+    assert.equal(code, 4001);
+    const h = await fetch(`http://127.0.0.1:${PORT}/health`).then((r) => r.json());
+    assert.equal(h.extension, true, 'real extension still connected');
+  });
+  await step('tools/list has 19 tools', async () => assert.equal((await mcp.listTools()).tools.length, 19));
+  await step('browser_status connected', async () => assert.match((await call('browser_status')).text, /"connected":true/));
+
+  let tabId, outline;
+  await step('tab_open into tab group', async () => {
+    tabId = JSON.parse((await call('tab_open', { url: `http://127.0.0.1:${PAGE_PORT}/` })).text).tabId;
+    const groups = await sw.evaluate(() => chrome.tabGroups.query({}).then((g) => g.map((x) => x.title)));
+    assert.ok(groups.some((t) => t.includes('Delulu')), `groups: ${groups}`);
+  });
+  await step('read_page lists refs', async () => {
+    outline = (await call('read_page', { tabId })).text;
+    assert.match(outline, /textbox "Full name"/);
+    assert.match(outline, /button "Continue"/);
+  });
+  await step('type + click (trusted input)', async () => {
+    await call('type', { tabId, ref: refOf(outline, /textbox "Full name"/), text: 'Ada Lovelace' });
+    await call('click', { tabId, ref: refOf(outline, /button "Continue"/) });
+    const p = ctx.pages().find((pg) => pg.url().startsWith(`http://127.0.0.1:${PAGE_PORT}`));
+    await p.screenshot({ path: path.join(SHOTS, 'hc-after-click.png') });
+    assert.match((await call('get_text', { tabId })).text, /Hello Ada Lovelace/);
+  });
+  await step('find', async () => assert.match((await call('find', { tabId, query: 'delete' })).text, /Delete account/));
+  await step('risky click asks; Enter = Deny', async () => {
+    const p = ctx.pages().find((pg) => pg.url().startsWith(`http://127.0.0.1:${PAGE_PORT}`));
+    const pending = call('click', { tabId, ref: refOf(outline, /Delete account/) }).then(() => 'resolved', (e) => e.message);
+    await sleep(1500);
+    await p.screenshot({ path: path.join(SHOTS, 'hc-confirm.png') });
+    await p.keyboard.press('Enter');
+    assert.match(await pending, /did not allow/);
+    assert.doesNotMatch((await call('get_text', { tabId })).text, /DELETED/);
+  });
+  await step('screenshot returns image', async () => {
+    const r = await call('screenshot', { tabId });
+    assert.ok(r.content.some((c) => c.type === 'image' && c.data.length > 1000));
+  });
+  await step('scroll', async () => assert.match((await call('scroll', { tabId, direction: 'down', amount: 800 })).text, /scrolled 0,[1-9]/));
+  await step('handoff: Done via keyboard', async () => {
+    const p = ctx.pages().find((pg) => pg.url().startsWith(`http://127.0.0.1:${PAGE_PORT}`));
+    const pending = call('handoff', { tabId, message: 'Please solve the CAPTCHA, then press Done.', timeoutSec: 30 });
+    await sleep(1200);
+    await p.screenshot({ path: path.join(SHOTS, 'hc-handoff.png') });
+    await p.keyboard.press('Enter');
+    assert.match((await pending).text, /user says they are done/);
+  });
+  await step('navigate + back', async () => {
+    assert.match((await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/two` })).text, /Two/);
+    assert.match((await call('navigate', { tabId, url: 'back' })).text, /HC test/);
+  });
+  await step('press_key', async () => assert.match((await call('press_key', { tabId, key: 'Tab' })).text, /pressed Tab/));
+  await step('eval_js disabled by default', async () => {
+    await assert.rejects(call('eval_js', { tabId, expression: '1+1' }), /disabled/);
+  });
+  await step('blocked host refused', async () => {
+    await sw.evaluate(() => chrome.storage.local.set({ blockedHosts: 'example.com' }));
+    await sleep(300);
+    await assert.rejects(call('tab_open', { url: 'https://www.example.com/' }), /blocked/);
+  });
+  const testPage = () => ctx.pages().find((pg) => pg.url().startsWith(`http://127.0.0.1:${PAGE_PORT}`));
+  await step('plan strip, intent caption, tab group progress', async () => {
+    await call('plan', { steps: ['Open the form', 'Fill in the name', 'Submit'] });
+    await call('plan', { done: 1 });
+    await testPage().bringToFront();
+    outline = (await call('read_page', { tabId })).text;
+    const pending = call('click', { tabId, ref: refOf(outline, /button "Continue"/), why: 'Submitting the form' });
+    await sleep(500);
+    await testPage().screenshot({ path: path.join(SHOTS, 'hc-plan-intent.png') });
+    await pending;
+    const titles = await sw.evaluate(() => chrome.tabGroups.query({}).then((g) => g.map((x) => x.title)));
+    assert.ok(titles.some((t) => /Delulu 2\/3/.test(t)), `group titles: ${titles}`);
+  });
+  await step('takeover pauses the agent; resume continues', async () => {
+    const p = testPage();
+    await call('plan', { done: 2 });
+    await p.mouse.move(100, 100);
+    await p.mouse.move(400, 400, { steps: 8 }); // just moving the mouse is not a takeover
+    await sleep(300);
+    assert.equal(await sw.evaluate(() => hud.paused), false, 'mouse movement alone must not pause');
+    await p.mouse.click(600, 500); // a real click is
+    for (let i = 0; i < 20 && !(await sw.evaluate(() => hud.paused)); i++) await sleep(100);
+    assert.equal(await sw.evaluate(() => hud.paused), true, 'paused after takeover');
+    const t0 = Date.now();
+    const pending = call('press_key', { tabId, key: 'Tab', why: 'Next field' });
+    await sleep(800);
+    await p.screenshot({ path: path.join(SHOTS, 'hc-paused.png') });
+    await sw.evaluate(() => resume());
+    assert.match((await pending).text, /pressed Tab/);
+    assert.ok(Date.now() - t0 >= 800, 'the call waited while paused');
+  });
+  await step('activity timeline records labelled steps with snapshots', async () => {
+    const { activity } = await sw.evaluate(() => chrome.storage.local.get('activity'));
+    assert.ok(activity.some((a) => a.label === 'Submitting the form' && a.thumb?.startsWith('data:image/jpeg')), JSON.stringify(activity.map((a) => a.label)));
+  });
+  await step('report returns stats and snapshots', async () => {
+    const r = await call('report', { summary: 'Filled the form' });
+    const stats = JSON.parse(r.text);
+    assert.ok(stats.steps >= 2);
+    assert.ok(r.content.some((c) => c.type === 'image'));
+  });
+  await step('teach: record a task, save it, replay it with a variable', async () => {
+    const p = testPage();
+    await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/` });
+    await p.bringToFront();
+    assert.equal((await sw.evaluate(() => startRecording())).ok, true);
+    await p.fill('#n', 'Recorded Name');
+    await p.click('#go');
+    await sleep(400);
+    const steps = await sw.evaluate(() => stopRecording());
+    assert.deepEqual(steps.map((s) => s.action), ['open', 'type', 'click'], JSON.stringify(steps));
+    assert.equal(steps[1].value, 'Recorded Name');
+    steps[1].value = '{{full_name}}';
+    await sw.evaluate((st) => ws.send(JSON.stringify({ type: 'save_skill', id: 't1', name: 'Say Hello', description: 'Greets someone', steps: st })), steps);
+    const file = path.join(stateDir, 'recordings', 'say-hello.json');
+    for (let i = 0; i < 20 && !fs.existsSync(file); i++) await sleep(100);
+    assert.ok(fs.existsSync(file));
+    assert.match((await call('replay', {})).text, /say-hello/);
+    assert.match((await call('replay', { name: 'say-hello' })).text, /needs values for: full_name/);
+    await p.evaluate(() => { document.getElementById('n').value = ''; document.getElementById('out').textContent = ''; });
+    assert.match((await call('replay', { name: 'say-hello', vars: { full_name: 'Replay Person' } })).text, /Replayed all 3 steps/);
+    assert.match(await p.textContent('#out'), /Hello Replay Person/);
+  });
+  await step('teach tab lists saved tasks: run (asks for values), survives reload, delete', async () => {
+    const panel = await ctx.newPage();
+    await panel.goto(`chrome-extension://${extId}/sidepanel.html`);
+    await panel.click('nav button[data-view="teach"]');
+    await panel.waitForFunction(() => /say-hello/.test(document.querySelector('#savedList')?.textContent || ''));
+    await panel.click('#savedList [data-run]');
+    await panel.waitForSelector('#savedList [data-var="full_name"]');
+    await panel.fill('#savedList [data-var="full_name"]', 'Panel Person');
+    await testPage().evaluate(() => { document.getElementById('out').textContent = ''; });
+    await panel.click('#savedList [data-run]'); // the page stays a background tab: replay must not hang on it
+    await panel.waitForFunction(() => /Replayed all 3 steps/.test(document.querySelector('#savedList').textContent), null, { timeout: 60_000 });
+    assert.match(await testPage().textContent('#out'), /Hello Panel Person/);
+    await panel.screenshot({ path: path.join(SHOTS, 'hc-teach-saved.png') });
+    await panel.reload();
+    await panel.click('nav button[data-view="teach"]');
+    await panel.waitForFunction(() => /say-hello/.test(document.querySelector('#savedList')?.textContent || ''));
+    await panel.click('#savedList [data-del]');
+    await panel.click('#savedList [data-del-yes]');
+    await panel.waitForFunction(() => /Nothing saved yet/.test(document.querySelector('#savedList').textContent));
+    assert.ok(!fs.existsSync(path.join(stateDir, 'recordings', 'say-hello.json')));
+    await panel.close();
+  });
+  await step('side panel chat streams reply + tool chip', async () => {
+    const extId = new URL(sw.url()).host;
+    const panel = await ctx.newPage();
+    await panel.goto(`chrome-extension://${extId}/sidepanel.html`);
+    await panel.fill('#input', 'what is on this page?');
+    await panel.keyboard.press('Enter');
+    await panel.waitForSelector('.assistant strong', { timeout: 10_000 });
+    assert.equal(await panel.textContent('.assistant'), 'Hello from mock');
+    assert.match(await panel.textContent('.tool'), /Read the page/);
+    assert.match(await panel.textContent('.note'), /Checking the page/);
+    assert.equal(await panel.textContent('#send'), 'Send');
+    const req = hermesRequests.at(-1);
+    assert.equal(req.auth, 'Bearer mock-key');
+    assert.equal(req.body.stream, true);
+    assert.match(req.body.conversation, /^hermes-chrome-/);
+    assert.match(req.body.input, /Hermes Chrome side panel[\s\S]*what is on this page\?$/);
+    await panel.screenshot({ path: path.join(SHOTS, 'hc-sidepanel.png') });
+    await panel.reload();
+    await panel.waitForSelector('.assistant');
+    assert.equal(await panel.textContent('.assistant'), 'Hello from mock', 'transcript persists');
+    await panel.close();
+  });
+  await step('side panel: model picker, / menu, attachments', async () => {
+    const panel = await ctx.newPage();
+    await panel.goto(`chrome-extension://${extId}/sidepanel.html`);
+    // model list: only signed-in providers with models
+    await panel.waitForFunction(() => document.querySelectorAll('#model option').length === 3, null, { timeout: 10_000 });
+    assert.deepEqual(await panel.$$eval('#model optgroup', (gs) => gs.map((g) => g.label)), ['Anthropic']);
+    // slash menu shows commands, /model picks by name
+    await panel.fill('#input', '/mo');
+    await panel.dispatchEvent('#input', 'input');
+    assert.match(await panel.textContent('#menu'), /\/model[\s\S]*\/models/);
+    await panel.fill('#input', '/model sonnet');
+    await panel.keyboard.press('Escape');
+    await panel.keyboard.press('Enter');
+    assert.equal(await panel.inputValue('#model'), 'anthropic::claude-sonnet-5-5');
+    // attachments: one image, one file
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', 'base64');
+    await panel.setInputFiles('#file', [{ name: 'dot.png', mimeType: 'image/png', buffer: png },
+      { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello file') }]);
+    await panel.waitForFunction(() => document.querySelectorAll('.att-chip').length === 2);
+    await panel.fill('#input', 'look at these');
+    await panel.keyboard.press('Enter');
+    await panel.waitForFunction(() => document.querySelectorAll('.assistant').length >= 2, null, { timeout: 10_000 });
+    const req = hermesRequests.at(-1).body;
+    assert.equal(req.model, 'claude-sonnet-5-5');
+    assert.equal(req.provider, 'anthropic');
+    assert.match(req.input[0].content[0].text, /you are running as claude-sonnet-5-5 \(provider anthropic\)/, 'the agent is told which model it is');
+    const parts = req.input[0].content;
+    assert.equal(parts.filter((p) => p.type === 'input_image').length, 1);
+    const saved = parts[0].text.match(/saved on this machine: (\S+)\. Read them/)[1];
+    assert.equal(fs.readFileSync(saved, 'utf8'), 'hello file');
+    assert.equal(await panel.$$eval('.att-chip', (c) => c.length), 0, 'attachments cleared after send');
+    await panel.screenshot({ path: path.join(SHOTS, 'hc-sidepanel-2.png') });
+    await panel.close();
+  });
+  await step('side panel: a dropped connection ends the pending chat', async () => {
+    const panel = await ctx.newPage();
+    await panel.goto(`chrome-extension://${extId}/sidepanel.html`);
+    await panel.fill('#input', 'SLOW reply please');
+    await panel.keyboard.press('Enter');
+    await panel.waitForFunction(() => document.querySelector('#send').textContent === 'Stop');
+    await sw.evaluate(() => ws.close());
+    await panel.waitForFunction(() => /connection to Hermes dropped/.test(document.querySelector('#log').textContent), null, { timeout: 5000 });
+    assert.equal(await panel.textContent('#send'), 'Send', 'input is usable again');
+    for (let i = 0; i < 40 && !(await health()).extension; i++) await sleep(250); // reconnects by itself
+    assert.equal((await health()).extension, true);
+    await panel.close();
+  });
+  await step('extension gone → unavailable message', async () => {
+    await ctx.close(); ctx = null;
+    await sleep(500);
+    const r = await mcp.callTool({ name: 'browser_status', arguments: {} });
+    assert.ok(r.isError);
+    assert.equal(r.content[0].text, 'MacBook not available');
+  });
+} catch (e) {
+  failed = true;
+  results.push(`FAIL setup: ${e.stack}`);
+} finally {
+  console.log(results.join('\n'));
+  console.log(`screenshots in ${SHOTS}`);
+  await mcp?.close().catch(() => {});
+  await ctx?.close().catch(() => {});
+  bridge.kill();
+  pageServer.close();
+  hermesMock.close();
+  fs.rmSync(userData, { recursive: true, force: true });
+  fs.rmSync(stateDir, { recursive: true, force: true });
+  process.exit(failed ? 1 : 0);
+}
