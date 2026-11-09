@@ -392,39 +392,65 @@ async function cdp(tabId, method, params = {}) {
 const rand = (a, b) => a + Math.random() * (b - a);
 const mousePos = new Map(); // tabId -> last real pointer position
 
-// Real mouseMoved events along the same kind of eased arc the visible cursor draws.
-async function moveMouse(tabId, x, y) {
-  const from = mousePos.get(tabId) || { x: x - rand(120, 260), y: y + rand(80, 180) };
-  const dx = x - from.x, dy = y - from.y, dist = Math.hypot(dx, dy);
-  mousePos.set(tabId, { x, y });
-  if (dist < 2) return;
-  const dur = Math.min(900, Math.max(280, 220 + dist * 0.55));
-  const steps = Math.max(8, Math.round(dur / 18));
-  const bend = Math.min(120, dist * 0.18);
+// Plan one move the way a hand moves a mouse: Fitts's-law timing (far or small targets take longer), a minimum-jerk
+// speed profile (smooth start and stop) along a gentle arc to one side, and on long moves a small overshoot that
+// settles back. The visible pointer and the real mouseMoved events walk exactly these points.
+function humanPath(from, to, size = 24) {
+  const dx = to.x - from.x, dy = to.y - from.y, dist = Math.hypot(dx, dy);
+  if (dist < 2) return { points: [[to.x, to.y]], ms: 0 };
+  const ms = Math.min(900, Math.max(180, 120 + 110 * Math.log2(dist / Math.max(8, size) + 1)));
+  const bend = Math.min(90, dist * rand(0.06, 0.16)) * (Math.random() < 0.5 ? -1 : 1);
   const cx = from.x + dx / 2 - (dy / dist) * bend, cy = from.y + dy / 2 + (dx / dist) * bend;
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps, e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2, k = 1 - e;
-    const px = k * k * from.x + 2 * k * e * cx + e * e * x, py = k * k * from.y + 2 * k * e * cy + e * e * y;
-    await cdp(tabId, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: Math.round(px), y: Math.round(py) });
-    await sleep(dur / steps);
+  const over = dist > 400 ? rand(0.02, 0.05) : 0;
+  const end = { x: to.x + dx * over, y: to.y + dy * over };
+  const minJerk = (t) => 10 * t ** 3 - 15 * t ** 4 + 6 * t ** 5;
+  const n = Math.max(10, Math.round(ms / 16));
+  const points = [];
+  for (let i = 0; i <= n; i++) {
+    const e = minJerk(i / n), k = 1 - e;
+    points.push([k * k * from.x + 2 * k * e * cx + e * e * end.x, k * k * from.y + 2 * k * e * cy + e * e * end.y]);
+  }
+  let total = ms;
+  if (over) { // settle back onto the target
+    for (let i = 1; i <= 5; i++) { const e = minJerk(i / 5); points.push([end.x + (to.x - end.x) * e, end.y + (to.y - end.y) * e]); }
+    total += rand(80, 120);
+  }
+  return { points: points.map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]), ms: Math.round(total) };
+}
+
+async function moveMouse(tabId, { points, ms }) {
+  const each = ms / Math.max(1, points.length - 1);
+  for (const [x, y] of points.slice(1)) {
+    await cdp(tabId, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: Math.round(x), y: Math.round(y) });
+    await sleep(each);
   }
 }
 
-// Point at a target: visible cursor and (in human pace) the real pointer travel together.
-async function pointAt(tabId, x, y, ref) {
+// Point at a target: the visible pointer and (in human pace) the real pointer travel the same path; then a short
+// hover before acting, as a person would.
+async function pointAt(tabId, x, y, ref, size) {
   const { humanPace } = await settings();
-  await Promise.all([page(tabId, 'pointAt', { x, y, ref }), humanPace ? moveMouse(tabId, x, y) : null]);
-  if (humanPace) await sleep(rand(80, 220));
+  const from = mousePos.get(tabId) || { x: x - rand(120, 260), y: y + rand(80, 180) };
+  const path = humanPath(from, { x, y }, size);
+  mousePos.set(tabId, { x, y });
+  await Promise.all([page(tabId, 'pointAt', { x, y, path: path.points, ms: path.ms }), humanPace ? moveMouse(tabId, path) : null]);
+  if (humanPace) await sleep(rand(120, 350));
 }
 
+// Typing comes in bursts of a few keys with short gaps, a little longer between words and after punctuation.
 async function typeHuman(tabId, text) {
+  let burst = 0, burstLen = Math.round(rand(3, 7));
   for (const ch of text) {
     if (ch === '\n') await pressKey(tabId, 'Enter');
     else {
       await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', key: ch, text: ch, unmodifiedText: ch });
       await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
     }
-    await sleep(rand(60, 180) + (/[\s.,!?]/.test(ch) && Math.random() < 0.3 ? rand(150, 350) : 0));
+    let gap = rand(55, 120);
+    if (/\s/.test(ch)) gap += rand(80, 220);
+    else if (/[.,!?;:]/.test(ch)) gap += rand(150, 350);
+    if (++burst >= burstLen) { gap += rand(120, 300); burst = 0; burstLen = Math.round(rand(3, 7)); }
+    await sleep(gap);
   }
 }
 
@@ -854,7 +880,6 @@ const METHODS = {
     else if (url === 'forward') await chrome.tabs.goForward(tab.id);
     else {
       if (await hostBlocked(url)) throw new Error(`The user has blocked the agent on ${new URL(url).hostname}.`);
-      await pageQuiet(tab.id, 'navToast', { url });
       await sleep(350);
       await chrome.tabs.update(tab.id, { url });
     }
@@ -900,10 +925,11 @@ const METHODS = {
 
   async click({ tabId, ref, x, y, double, button, why }) {
     const tab = await resolveTab(tabId);
-    let desc = `(${x}, ${y})`;
+    let desc = `(${x}, ${y})`, size = 24;
     if (ref) {
       let w, h;
       ({ x, y, w, h, desc } = await page(tab.id, 'locate', { ref }));
+      size = Math.min(w, h);
       if ((await settings()).humanPace) { // land somewhere inside the element, not dead centre
         x = Math.round(x + rand(-0.5, 0.5) * Math.min(w * 0.4, 16));
         y = Math.round(y + rand(-0.5, 0.5) * Math.min(h * 0.4, 8));
@@ -917,7 +943,7 @@ const METHODS = {
     typedSince.delete(tab.id);
     if (checked !== 'asked') await maybeConfirm(tab.id, desc, tab.url);
     await acting(tab.id, async () => {
-      await pointAt(tab.id, x, y, ref);
+      await pointAt(tab.id, x, y, ref, size);
       await verifyTarget(tab, { ref, x, y, desc }); // the page may have changed while the user was deciding
       await Promise.all([pageQuiet(tab.id, 'press', { x, y }), mouseClick(tab.id, x, y, { button, clickCount: double ? 2 : 1 })]);
     });
@@ -964,8 +990,18 @@ const METHODS = {
       const x = Math.round(w / 2), y = Math.round(h / 2);
       await pointAt(tab.id, x, y, null);
       const d = { up: [0, -amount], down: [0, amount], left: [-amount, 0], right: [amount, 0] }[direction];
-      await cdp(tab.id, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: d[0], deltaY: d[1] });
-      await sleep(400);
+      if ((await settings()).humanPace) { // a few wheel notches that ease out, like a flick of the wheel
+        const k = Math.min(5, Math.max(2, Math.round(Math.abs(amount) / 150)));
+        const weights = Array.from({ length: k }, (_, i) => k - i), sum = weights.reduce((a, b) => a + b, 0);
+        for (const w of weights) {
+          await cdp(tab.id, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: Math.round(d[0] * w / sum), deltaY: Math.round(d[1] * w / sum) });
+          await sleep(rand(35, 70));
+        }
+        await sleep(rand(300, 700));
+      } else {
+        await cdp(tab.id, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: d[0], deltaY: d[1] });
+        await sleep(400);
+      }
       return ok(await page(tab.id, 'scrollInfo'));
     });
   },

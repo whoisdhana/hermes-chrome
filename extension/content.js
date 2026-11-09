@@ -1,6 +1,6 @@
 // Hermes Chrome — in-page side.
 // 1. Page model: outline/find/text with stable element refs ("e12").
-// 2. Overlay: animated agent cursor, click ripple, target highlight, activity glow, toasts, handoff banner.
+// 2. Overlay: the agent's pointer (moves like a hand, I-beam while typing), click ripple, plan pill, handoff and waiting cards.
 // Runs in the extension's isolated world; the background worker calls API functions via messages.
 (() => {
   if (window.__hermesChrome) return;
@@ -142,54 +142,53 @@
       <style>
         :host { all: initial; }
         * { box-sizing: border-box; font-family: ui-sans-serif, -apple-system, "Segoe UI", sans-serif; }
-        .glow { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity .5s;
-          box-shadow: inset 0 0 0 2px rgba(186,88,61,.85), inset 0 0 28px rgba(186,88,61,.35); }
-        .glow.on { opacity: 1; animation: breathe 2.4s ease-in-out infinite; }
-        @keyframes breathe { 50% { box-shadow: inset 0 0 0 2px rgba(186,88,61,.55), inset 0 0 14px rgba(186,88,61,.18); } }
-        .cursor { position: fixed; left: 0; top: 0; width: 26px; height: 26px; opacity: 0; transition: opacity .3s; will-change: transform; }
+        .cursor { position: fixed; left: 0; top: 0; width: 22px; height: 22px; opacity: 0; transition: opacity .35s; will-change: transform; }
         .cursor.on { opacity: 1; }
-        .cursor svg { width: 26px; height: 26px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); transition: transform .12s; transform-origin: 3px 3px; }
-        .cursor.press svg { transform: scale(.82); }
-        .plan { position: fixed; top: 10px; left: 50%; transform: translate(-50%, -12px); width: min(520px, calc(100vw - 24px));
-          pointer-events: auto; background: #FFFDFA; color: #35302A; border: 1px solid #E7D6C8; border-radius: 12px;
-          box-shadow: 0 8px 26px rgba(53,48,42,.18); padding: 8px 10px 9px 12px; opacity: 0; transition: opacity .25s, transform .25s; }
-        .plan.on { opacity: 1; transform: translate(-50%, 0); }
-        .plan .row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
-        .plan .who { font-weight: 800; color: #BA583D; }
-        .plan .now { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cursor.yield { opacity: 0; transition: opacity .15s; }
+        .cursor svg { position: absolute; inset: 0; width: 22px; height: 22px; filter: drop-shadow(0 1px 1.5px rgba(0,0,0,.35));
+          transition: transform .07s ease-out; transform-origin: 3px 3px; }
+        .cursor .beam { display: none; transform-origin: 11px 11px; }
+        .cursor.text .arrow { display: none; }
+        .cursor.text .beam { display: block; }
+        .cursor.press svg { transform: scale(.92); }
+        .yield svg { transform: scale(.7); }
+        .plan { position: fixed; bottom: 14px; right: 14px; pointer-events: auto; display: flex; align-items: center; gap: 8px;
+          background: rgba(255,253,250,.96); color: #35302A; border: 1px solid #E7D6C8; border-radius: 999px;
+          box-shadow: 0 4px 14px rgba(53,48,42,.14); padding: 5px 6px 5px 12px; font-size: 12.5px; opacity: 0;
+          transform: translateY(6px); transition: opacity .25s, transform .25s; }
+        .plan.on { opacity: 1; transform: none; }
+        .plan .row { display: flex; align-items: center; gap: 8px; }
+        .plan .who { display: none; }
+        .plan .dots { display: flex; gap: 4px; }
+        .plan .dots i { width: 6px; height: 6px; border-radius: 50%; background: #E7D6C8; transition: background .3s; }
+        .plan .dots i.done { background: #BA583D; }
+        .plan .dots i.now { background: #BA583D; box-shadow: 0 0 0 3px rgba(186,88,61,.18); }
+        .plan .now { max-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; transition: max-width .3s ease; }
+        .plan:hover .now, .plan.paused .now { max-width: 320px; }
         .plan .count { color: #8A7E73; font-variant-numeric: tabular-nums; }
-        .plan button { all: unset; cursor: pointer; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px;
-          color: #35302A; font-size: 13px; }
+        .plan button { all: unset; cursor: pointer; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%;
+          color: #35302A; font-size: 12px; }
         .plan button:hover { background: #F3E9DF; }
         .plan button:focus-visible { outline: 2px solid #BA583D; }
-        .plan .bar { height: 3px; margin-top: 7px; background: #F0E4D9; border-radius: 3px; overflow: hidden; }
-        .plan .bar i { display: block; height: 100%; width: 0; background: #BA583D; border-radius: 3px; transition: width .5s ease; }
+        .plan .bar { display: none; }
         .plan.paused { border-color: #BA583D; }
         .plan .rec { width: 8px; height: 8px; border-radius: 50%; background: #DC2626; animation: blink 1.2s infinite; }
         @keyframes blink { 50% { opacity: .3; } }
-        .scan { position: fixed; left: 0; right: 0; top: 0; height: 90px; pointer-events: none;
-          background: linear-gradient(to bottom, rgba(186,88,61,0), rgba(186,88,61,.10) 70%, rgba(186,88,61,.45));
-          border-bottom: 1px solid rgba(186,88,61,.6); animation: scan .8s ease-in-out forwards; }
-        @keyframes scan { from { transform: translateY(-90px); opacity: 1; } 85% { opacity: 1; } to { transform: translateY(100vh); opacity: 0; } }
         .flash { position: fixed; border: 2px dashed #DC2626; border-radius: 6px; animation: hl .9s ease-out forwards; }
-        .ripple { position: fixed; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 2px solid #BA583D;
-          animation: ripple .6s ease-out forwards; }
-        @keyframes ripple { to { transform: scale(4.5); opacity: 0; } }
-        .hl { position: fixed; border: 2px solid #BA583D; border-radius: 6px; background: rgba(186,88,61,.10);
-          animation: hl 1.1s ease-out forwards; }
-        .hl.typing { animation: typing 1s ease-in-out infinite; }
+        .ripple { position: fixed; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; border: 1.5px solid rgba(186,88,61,.8);
+          animation: ripple .28s ease-out forwards; }
+        @keyframes ripple { to { transform: scale(2.5); opacity: 0; } }
+        .ring { position: fixed; border-radius: 10px; box-shadow: 0 0 0 2px #BA583D, 0 0 0 8px rgba(186,88,61,.16); pointer-events: none;
+          animation: ring 1.6s ease-out 1 forwards; }
+        @keyframes ring { 0% { opacity: 0; } 20% { opacity: 1; } 100% { opacity: .55; } }
         @keyframes hl { 0% { opacity: 0; transform: scale(1.06); } 15% { opacity: 1; transform: scale(1); } 75% { opacity: 1; } 100% { opacity: 0; } }
-        @keyframes typing { 50% { background: rgba(186,88,61,.22); } }
-        .toast { position: fixed; top: 14px; left: 50%; transform: translate(-50%, -8px); max-width: min(560px, 90vw);
-          padding: 7px 14px; border-radius: 999px; background: rgba(28,25,23,.92); color: #FAFAF9; font-size: 12.5px;
-          opacity: 0; transition: opacity .25s, transform .25s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .toast.on { opacity: 1; transform: translate(-50%, 0); }
-        .toast b { color: #E9A58F; }
-        .handoff { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); width: min(520px, calc(100vw - 32px));
+        .handoff { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); width: min(440px, calc(100vw - 32px));
           pointer-events: auto; background: #1C1917; color: #FAFAF9; border: 2px solid #BA583D; border-radius: 14px;
           padding: 14px 16px; box-shadow: 0 12px 40px rgba(0,0,0,.45); display: flex; gap: 12px; align-items: center;
-          animation: rise .35s cubic-bezier(.2,.9,.3,1.2); }
-        @keyframes rise { from { transform: translate(-50%, 30px); opacity: 0; } }
+          animation: rise .3s ease-out; }
+        .handoff.anchored { transform: none; animation-name: appear; }
+        @keyframes rise { from { transform: translate(-50%, 12px); opacity: 0; } }
+        @keyframes appear { from { opacity: 0; } }
         .handoff .msg { flex: 1; font-size: 13.5px; line-height: 1.4; }
         .handoff .who { display: block; font-size: 11px; font-weight: 700; color: #E9A58F; margin-bottom: 2px; letter-spacing: .02em; }
         .handoff button { all: unset; cursor: pointer; padding: 8px 14px; border-radius: 9px; font-size: 13px; font-weight: 700; }
@@ -197,20 +196,20 @@
         .handoff .skip { color: #A8A29E; }
         .handoff button:focus-visible { outline: 2px solid #E9A58F; outline-offset: 2px; }
       </style>
-      <div class="glow"></div>
-      <div class="cursor"><svg viewBox="0 0 26 26"><path d="M3 2.5 L3 20 L8 15.5 L11.2 22.5 L14.3 21.1 L11.2 14.3 L18 14.3 Z"
-        fill="#35302A" stroke="#FFFFFF" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
-      <div class="plan" role="status"><div class="row"><span class="who"></span><span class="now"></span><span class="count"></span>
+      <div class="cursor"><svg class="arrow" viewBox="0 0 26 26"><path d="M3 2.5 L3 20 L8 15.5 L11.2 22.5 L14.3 21.1 L11.2 14.3 L18 14.3 Z"
+        fill="#35302A" stroke="#FFFFFF" stroke-width="1.6" stroke-linejoin="round"/></svg><svg class="beam" viewBox="0 0 22 22"><path
+        d="M8 3.5 Q11 3.5 11 6 Q11 3.5 14 3.5 M11 6 L11 16 M8 18.5 Q11 18.5 11 16 Q11 18.5 14 18.5" fill="none" stroke="#FFFFFF" stroke-width="3.2"
+        stroke-linecap="round"/><path d="M8 3.5 Q11 3.5 11 6 Q11 3.5 14 3.5 M11 6 L11 16 M8 18.5 Q11 18.5 11 16 Q11 18.5 14 18.5" fill="none"
+        stroke="#35302A" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+      <div class="plan" role="status"><div class="row"><span class="who"></span><span class="dots"></span><span class="now"></span><span class="count"></span>
         <button class="pause" type="button" aria-label="Pause">⏸</button><button class="stop" type="button" aria-label="Stop this task">✕</button></div>
         <div class="bar"><i></i></div></div>
-      <div class="toast"></div>`;
+`;
     document.documentElement.appendChild(host);
     ui = {
       root,
-      glow: root.querySelector('.glow'),
       cursor: root.querySelector('.cursor'),
       plan: root.querySelector('.plan'),
-      toast: root.querySelector('.toast'),
     };
     ui.plan.querySelector('.pause').onclick = () => chrome.runtime.sendMessage({ hud: ui.plan.classList.contains('paused') ? 'resume' : 'pause' });
     ui.plan.querySelector('.stop').onclick = () => chrome.runtime.sendMessage({ hud: 'stop' });
@@ -230,19 +229,21 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
+  // Like a real pointer: visible while it moves, gone a moment after it stops.
   let idleTimer;
   function active() {
     const u = overlay();
-    u.glow.classList.add('on');
+    u.cursor.classList.remove('yield');
     u.cursor.classList.add('on');
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => u.glow.classList.remove('on'), 2500);
+    idleTimer = setTimeout(() => { if (!u.cursor.classList.contains('text')) u.cursor.classList.remove('on'); }, 2500);
   }
 
   // Move along a gentle arc (quadratic Bézier) with ease-in-out; duration scales with distance.
-  function cursorTo(x, y) {
+  function cursorTo(x, y, path, pathMs) {
     const u = overlay();
     active();
+    if (path?.length > 1 && !REDUCED && !document.hidden) return followPath(path, pathMs);
     const from = { ...pos };
     const dx = x - from.x, dy = y - from.y, dist = Math.hypot(dx, dy);
     // Hidden tabs get no animation frames: jump instead of waiting forever.
@@ -265,6 +266,24 @@
     });
   }
 
+  // The background plans each move (timing, curve, overshoot) and sends the points; the real mouse events walk the
+  // same points, so what the person sees is exactly where the pointer is.
+  function followPath(path, dur) {
+    return new Promise((resolve) => {
+      const t0 = performance.now(), n = path.length - 1;
+      let finished = false;
+      const finish = () => { if (finished) return; finished = true; place(path[n][0], path[n][1]); saveCursor(); resolve(); };
+      setTimeout(finish, dur + 300);
+      const step = (now) => {
+        if (finished) return;
+        const f = Math.min(1, (now - t0) / dur) * n, i = Math.min(n - 1, Math.floor(f)), k = f - i;
+        place(path[i][0] + (path[i + 1][0] - path[i][0]) * k, path[i][1] + (path[i + 1][1] - path[i][1]) * k);
+        if (f < n) requestAnimationFrame(step); else finish();
+      };
+      requestAnimationFrame(step);
+    });
+  }
+
   async function press(x, y) {
     const u = overlay();
     active();
@@ -273,33 +292,13 @@
     r.className = 'ripple';
     r.style.left = `${x}px`; r.style.top = `${y}px`;
     u.root.appendChild(r);
-    setTimeout(() => r.remove(), 650);
-    await sleep(110);
+    setTimeout(() => r.remove(), 320);
+    await sleep(70);
     u.cursor.classList.remove('press');
   }
 
-  function highlight(el, typing = false) {
-    const u = overlay();
-    const r = el.getBoundingClientRect();
-    const box = document.createElement('div');
-    box.className = typing ? 'hl typing' : 'hl';
-    Object.assign(box.style, { left: `${r.left - 4}px`, top: `${r.top - 4}px`, width: `${r.width + 8}px`, height: `${r.height + 8}px` });
-    u.root.appendChild(box);
-    if (!typing) setTimeout(() => box.remove(), 1150);
-    return box;
-  }
-
-  let toastTimer;
-  function toast(html, ms = 2200) {
-    const u = overlay();
-    u.toast.innerHTML = html;
-    u.toast.classList.add('on');
-    clearTimeout(toastTimer);
-    if (ms) toastTimer = setTimeout(() => u.toast.classList.remove('on'), ms);
-  }
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
-  let typingBox = null;
 
   // ------------------------------------------------------------ plan strip (HUD)
   // state: {agent, active, paused, recording, plan: {steps, done}}
@@ -319,6 +318,7 @@
       : steps[done] || (steps.length ? 'Wrapping up' : '');
     p.querySelector('.count').textContent = steps.length && !s.recording ? `${Math.min(done + 1, steps.length)}/${steps.length}` : '';
     p.querySelector('.bar i').style.width = steps.length ? `${(done / steps.length) * 100}%` : '0';
+    p.querySelector('.dots').innerHTML = s.recording ? '' : steps.map((_, i) => `<i class="${i < done ? 'done' : i === done ? 'now' : ''}"></i>`).join('');
     const btn = p.querySelector('.pause');
     btn.textContent = s.paused ? '▶' : '⏸';
     btn.setAttribute('aria-label', s.paused ? 'Resume' : 'Pause');
@@ -326,15 +326,7 @@
     p.querySelector('.stop').setAttribute('aria-label', s.recording ? 'Stop recording' : 'Stop this task');
   }
 
-  function readingSweep() {
-    if (REDUCED) return;
-    const u = overlay();
-    active();
-    const s = document.createElement('div');
-    s.className = 'scan';
-    u.root.appendChild(s);
-    setTimeout(() => s.remove(), 900);
-  }
+  function readingSweep() { active(); } // reading shows as the pointer resting and the page scrolling, not as an effect
 
   // ------------------------------------------------------------ takeover detection
   // While the agent works in this tab, a real click or key press that is not the agent's own (it
@@ -345,6 +337,7 @@
     if (!watching || acting || tookOver || !e.isTrusted || e.composedPath?.().includes(host)) return;
     if (e.type === 'keydown' && ['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return; // e.g. the ⌥⇧. shortcut itself
     tookOver = true;
+    ui?.cursor.classList.add('yield');
     chrome.runtime.sendMessage({ takeover: true, by: e.type }).catch(() => {});
   }
   for (const t of ['mousedown', 'keydown']) addEventListener(t, onHumanInput, { capture: true, passive: true });
@@ -431,13 +424,36 @@
   const CHALLENGE = 'iframe[src*="recaptcha"], iframe[src*="hcaptcha.com"], iframe[src*="challenges.cloudflare.com"], iframe[src*="arkoselabs"],'
     + ' iframe[src*="funcaptcha"], iframe[src*="geetest"], iframe[src*="captcha-delivery.com"], #challenge-form, #cf-challenge-running, .g-recaptcha, .h-captcha, .cf-turnstile';
   const TOKENS = 'textarea[name="g-recaptcha-response"], textarea[name="h-captcha-response"], input[name="cf-turnstile-response"]';
-  function challengeState() {
-    if ([...document.querySelectorAll(TOKENS)].some((t) => t.value)) return 'solved';
-    const open = [...document.querySelectorAll(CHALLENGE)].some((el) => {
+  function challengeEl() {
+    return [...document.querySelectorAll(CHALLENGE)].find((el) => {
       const r = el.getBoundingClientRect();
       return r.width > 20 && r.height > 20 && getComputedStyle(el).visibility !== 'hidden';
-    });
-    return open ? 'open' : 'none';
+    }) || null;
+  }
+  function challengeState() {
+    if ([...document.querySelectorAll(TOKENS)].some((t) => t.value)) return 'solved';
+    return challengeEl() ? 'open' : 'none';
+  }
+
+  // Cards sit next to what they are about (the CAPTCHA, the button waiting for approval) instead of at the page edge.
+  function anchorNear(box, r) {
+    const w = Math.min(440, innerWidth - 32), gap = 12;
+    box.classList.add('anchored');
+    box.style.width = `${w}px`;
+    box.style.left = `${Math.min(Math.max(16, r.left + r.width / 2 - w / 2), innerWidth - w - 16)}px`;
+    if (r.bottom + gap + 110 < innerHeight) { box.style.top = `${r.bottom + gap}px`; box.style.bottom = 'auto'; }
+    else { box.style.top = 'auto'; box.style.bottom = `${Math.max(16, innerHeight - r.top + gap)}px`; }
+  }
+  function ringAround(root, el) {
+    const ring = document.createElement('div');
+    ring.className = 'ring';
+    const place = () => {
+      const r = el.getBoundingClientRect();
+      Object.assign(ring.style, { left: `${r.left - 6}px`, top: `${r.top - 6}px`, width: `${r.width + 12}px`, height: `${r.height + 12}px` });
+    };
+    place();
+    root.appendChild(ring);
+    return { ring, place };
   }
 
   const API = {
@@ -482,10 +498,7 @@
       return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), w: r.width, h: r.height, desc: line(el) };
     },
 
-    async pointAt({ x, y, ref }) {
-      if (ref) highlight(elFor(ref));
-      await cursorTo(x, y);
-    },
+    async pointAt({ x, y, path, ms }) { await cursorTo(x, y, path, ms); },
 
     // Mark the tab in the tab strip: a favicon with a status dot (null restores the page's own icon).
     favicon({ dataUrl }) {
@@ -523,15 +536,10 @@
 
     press({ x, y }) { return press(x, y); },
 
-    typing({ ref, on }) {
-      typingBox?.remove();
-      typingBox = null;
-      if (on) {
-        if (ref) typingBox = highlight(elFor(ref), true);
-        toast(`<b>${esc(agentName)}</b> is typing…`, 0);
-      } else {
-        overlay().toast.classList.remove('on');
-      }
+    typing({ on }) {
+      const u = overlay();
+      u.cursor.classList.toggle('text', !!on); // an I-beam over the field, as with a real pointer
+      active();
     },
 
     clearField({ ref }) {
@@ -544,11 +552,6 @@
       el.dispatchEvent(new Event('input', { bubbles: true }));
     },
 
-    navToast({ url }) {
-      let host = url;
-      try { host = new URL(url).host; } catch {}
-      toast(`<b>${esc(agentName)}</b> → ${esc(host)}`, 1800);
-    },
 
     viewport() { active(); return { w: innerWidth, h: innerHeight }; },
     scrollInfo() { return `scrolled ${Math.round(scrollX)},${Math.round(scrollY)} of ${document.documentElement.scrollWidth}x${document.documentElement.scrollHeight}`; },
@@ -558,6 +561,7 @@
     handoff({ message, timeoutSec = 600 }) {
       const u = overlay();
       const watchChallenge = challengeState() === 'open'; // a CAPTCHA is on screen: continue by itself once it is solved
+      const target = challengeEl();
       u.root.querySelector('.handoff')?.remove();
       const box = document.createElement('div');
       box.className = 'handoff';
@@ -565,9 +569,16 @@
       box.innerHTML = `<div class="msg"><span class="who">${esc(agentName)} needs you</span>${esc(message)}</div>
         <button class="skip" type="button">Skip</button><button class="done" type="button">Done</button>`;
       u.root.appendChild(box);
+      let mark = null;
+      const follow = () => { if (!target?.isConnected) return; anchorNear(box, target.getBoundingClientRect()); mark?.place(); };
+      if (target) { mark = ringAround(u.root, target); follow(); addEventListener('scroll', follow, true); addEventListener('resize', follow); }
       box.querySelector('.done').focus();
       return new Promise((resolve) => {
-        const finish = (status) => { clearTimeout(t); box.remove(); resolve(status); };
+        const finish = (status) => {
+          clearTimeout(t); box.remove(); mark?.ring.remove();
+          removeEventListener('scroll', follow, true); removeEventListener('resize', follow);
+          resolve(status);
+        };
         const t = setTimeout(() => finish('timeout'), timeoutSec * 1000);
         box.querySelector('.done').addEventListener('click', () => finish('done'));
         box.querySelector('.skip').addEventListener('click', () => finish('skipped'));
@@ -592,6 +603,7 @@
       box.setAttribute('role', 'status');
       box.innerHTML = `<div class="msg"><span class="who">Approval needed</span>${esc(message)}</div>`;
       u.root.appendChild(box);
+      anchorNear(box, { left: pos.x, right: pos.x, width: 0, top: pos.y, bottom: pos.y + 24, height: 24 }); // next to the pointer's target
     },
     waitingDone() { overlay().root.querySelector('.handoff.waiting')?.remove(); },
   };
