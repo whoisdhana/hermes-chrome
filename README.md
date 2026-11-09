@@ -13,6 +13,12 @@ You watch it work: an agent cursor glides to each target, clicks ripple, the pag
 
 Setup is two steps: enable the plugin, then send `/chrome pair` and paste the code into the extension. No tokens, no config files.
 
+**Easiest install:** send this to your Hermes agent and it does the rest, then tells you the three clicks left for Chrome:
+
+```
+Install Hermes Chrome for me: read https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/AGENT_INSTALL.md and follow it.
+```
+
 The extension connects out to Hermes, so your laptop needs no open ports. When the laptop is asleep or Chrome is closed, the tools return one plain message (default `Browser not available`) and the agent tells you instead of guessing.
 
 ## Watching it work
