@@ -172,6 +172,27 @@ function versionNote(pluginVersion) {
   return null;
 }
 
+// One-click updates through the optional update helper (updater/install.sh, installed once on this computer).
+// The helper only downloads the official release, checks its SHA-256 and replaces this extension's folder
+// (set when it was installed); this side cannot name a URL or a folder.
+const UPDATER = 'com.hermes_chrome.updater';
+const UPDATER_SETUP = 'curl -fsSL https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/updater/install.sh | bash';
+async function checkUpdater() {
+  try {
+    const r = await Promise.race([chrome.runtime.sendNativeMessage(UPDATER, { cmd: 'status' }),
+      new Promise((_, no) => setTimeout(() => no(new Error('The update helper did not answer.')), 10_000))]);
+    return r?.installed && !r.error ? r : { installed: false, error: r?.error || '' };
+  } catch (e) { return { installed: false, error: '' }; } // not installed, or not allowed for this extension id
+}
+async function runUpdate() {
+  let r;
+  try { r = await chrome.runtime.sendNativeMessage(UPDATER, { cmd: 'update' }); }
+  catch (e) { return { ok: false, error: `The update helper is not available (${e.message}).` }; }
+  if (!r?.ok) return { ok: false, error: r?.error || 'The update helper did not answer.' };
+  setTimeout(() => chrome.runtime.reload(), 400); // let the reply reach the page first
+  return r;
+}
+
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(() => { chrome.alarms.create('keepalive', { periodInMinutes: 0.5 }); connect(); });
 chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'keepalive') connect(); });
@@ -213,6 +234,8 @@ async function stopAgent() {
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg?.popup === 'status') { sendResponse({ connected: ws?.readyState === 1 }); return; }
   if (msg?.popup === 'pair') { pair(msg.code).then(sendResponse); return true; }
+  if (msg?.popup === 'updaterStatus') { checkUpdater().then((r) => sendResponse({ ...r, setup: UPDATER_SETUP })); return true; }
+  if (msg?.popup === 'runUpdate') { runUpdate().then(sendResponse); return true; }
   if (msg?.popup === 'unpair') {
     ws?.close();
     chrome.storage.local.set({ deviceId: '', deviceKey: '', url: '', host: '', pairError: '' }).then(() => { setBadge('off'); sendResponse({ ok: true }); });

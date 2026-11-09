@@ -47,9 +47,26 @@ What a recording never contains: passwords, card numbers, CVV, IBAN, SSN, accoun
 - Releases list the SHA-256 of the extension zip; compare it with `shasum -a 256 hermes-chrome-extension.zip` before loading it.
 - Side-panel chat uses your Hermes API server on the same machine; its key is read on the server and never sent to the browser.
 
+## Update helper
+
+The optional update helper (`updater/`, installed with `install.sh` into `~/.hermes-chrome-updater/`) is what makes **Update now** work. It is a small Python program that the browser starts only when the extension asks it to, through Chrome's native messaging. It can do exactly two things:
+
+- **status**: report its version, the extension folder it was set up for, and the version found there.
+- **update**: download the latest Hermes Chrome release and replace the contents of that one folder.
+
+What keeps that narrow:
+
+- **Only the official release.** The release address is fixed in the helper (`api.github.com/repos/whoisdhana/hermes-chrome/releases/latest`), the zip must come from `github.com/whoisdhana/hermes-chrome/releases/download/`, and every request is HTTPS (redirects to plain HTTP are refused). The extension's message cannot name a URL.
+- **Checked before use.** The zip's SHA-256 must equal the digest GitHub publishes for that release asset. No digest, no update. The zip must not contain absolute paths, `..` or symbolic links, its `manifest.json` must be named "Hermes Chrome", and its version must be newer than the installed one.
+- **One folder.** The folder comes only from the helper's own `config.json`, written by the installer from your browser profiles (extensions you loaded unpacked, named "Hermes Chrome") or from `--dir`. It is looked up by the calling extension's id, which the browser passes to the helper, never from the message. The current folder must itself hold Hermes Chrome. The helper writes and deletes only inside that folder; symbolic links found there are removed, never followed. A folder that is a git clone is skipped by the installer.
+- **Only this extension can call it.** Each browser's registration (`NativeMessagingHosts/com.hermes_chrome.updater.json`) allows exactly the Hermes Chrome extension ids found in that browser. Web pages cannot reach it.
+- It runs as you, with no admin rights, keeps no network connection open, and logs errors to `~/.hermes-chrome-updater/updater.log`. The installer itself is fetched over HTTPS from this repository's `main` branch, like the rest of the code.
+
+`bash install.sh --uninstall` (or `curl -fsSL https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/updater/install.sh | bash -s -- --uninstall`) removes the helper and every registration it added.
+
 ## No telemetry
 
-This project sends no analytics, crash reports or usage data anywhere. The only network traffic is between your browser and your own Hermes, and whatever your Hermes already does (model provider, Telegram).
+This project sends no analytics, crash reports or usage data anywhere. The only network traffic is between your browser and your own Hermes, whatever your Hermes already does (model provider, Telegram), and, when you press **Update now**, the update helper fetching the release from GitHub.
 
 ## Revoking access
 

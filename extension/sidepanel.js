@@ -563,13 +563,42 @@ async function refreshStatus() {
 // Update notice: the extension is behind the plugin (download + reload), or the plugin is behind the extension.
 function renderUpdate(n) {
   const box = $('update');
+  box.dataset.render = '';
   box.hidden = !n;
   if (!n) return;
   if (n.kind === 'extension') {
-    box.innerHTML = `<b>Hermes Chrome ${esc(n.latest)} is available</b> (you have ${esc(n.current)}). Download it, unzip it over your current extension folder, then press Reload.
-      <div class="acts"><button class="primary" type="button" data-act="download">Download</button><button class="ghost" type="button" data-act="reload">Reload extension</button></div>`;
-    box.querySelector('[data-act=download]').onclick = () => chrome.tabs.create({ url: n.url });
-    box.querySelector('[data-act=reload]').onclick = () => chrome.runtime.reload();
+    const head = `<b>Hermes Chrome ${esc(n.latest)} is available</b> (you have ${esc(n.current)}).`;
+    box.innerHTML = head;
+    const token = box.dataset.render = String(Math.random());
+    // Ask the update helper in the background; the banner never waits on it.
+    chrome.runtime.sendMessage({ popup: 'updaterStatus' }).catch(() => ({ installed: false })).then((u) => {
+      if (box.hidden || box.dataset.render !== token) return; // replaced meanwhile
+      if (u?.installed) {
+        box.innerHTML = `${head}<div class="acts"><button class="primary" type="button" data-act="update">Update now</button></div><div class="upd-msg" hidden></div>`;
+        const btn = box.querySelector('[data-act=update]'), msg = box.querySelector('.upd-msg');
+        btn.onclick = async () => {
+          btn.disabled = true;
+          btn.textContent = 'Updating…';
+          msg.hidden = true;
+          const r = await chrome.runtime.sendMessage({ popup: 'runUpdate' }).catch((e) => ({ ok: false, error: e.message }));
+          if (r?.ok) { btn.textContent = `Updated to ${r.to}. Reloading…`; return; } // the extension reloads itself
+          btn.disabled = false;
+          btn.textContent = 'Update now';
+          msg.hidden = false;
+          msg.textContent = r?.error || 'The update failed.';
+        };
+        return;
+      }
+      box.innerHTML = `${head} Download it, unzip it over your current extension folder, then press Reload.
+        <div class="acts"><button class="primary" type="button" data-act="download">Download</button><button class="ghost" type="button" data-act="reload">Reload extension</button></div>
+        <div class="setup">One-click updates from now on: run this once in Terminal on this computer.
+          <div class="cmd"><code>${esc(u?.setup || '')}</code><button class="ghost" type="button" data-act="copy">Copy</button></div></div>`;
+      box.querySelector('[data-act=download]').onclick = () => chrome.tabs.create({ url: n.url });
+      box.querySelector('[data-act=reload]').onclick = () => chrome.runtime.reload();
+      const copy = box.querySelector('[data-act=copy]');
+      copy.onclick = () => navigator.clipboard.writeText(u?.setup || '').then(() => { copy.textContent = 'Copied'; },
+        () => { getSelection().selectAllChildren(box.querySelector('.cmd code')); copy.textContent = 'Press ⌘C'; });
+    });
   } else {
     box.innerHTML = `<b>Your Hermes plugin is older</b> (${esc(n.plugin)}, this extension is ${esc(n.current)}). Ask your agent: "Update Hermes Chrome".`;
   }

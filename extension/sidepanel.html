@@ -79,7 +79,13 @@
     .update .acts { display: flex; gap: 8px; margin-top: 8px; }
     .update .acts button { padding: 5px 10px; border-radius: 8px; font-weight: 600; font-size: 12px; }
     .update .acts .primary { background: var(--accent); color: var(--accent-ink); }
-    .update .acts .ghost { box-shadow: inset 0 0 0 1px var(--line); }
+    .update .acts .ghost, .update .cmd .ghost { box-shadow: inset 0 0 0 1px var(--line); }
+    .update .upd-msg { margin-top: 6px; color: var(--err); }
+    .update .setup { margin-top: 10px; color: var(--muted); }
+    .update .cmd { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+    .update .cmd code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; background: var(--surface); padding: 4px 6px;
+      border-radius: 6px; font: 11px ui-monospace, Menlo, monospace; color: var(--text); user-select: all; }
+    .update .cmd button { padding: 4px 8px; border-radius: 8px; font-weight: 600; font-size: 12px; flex: none; }
     .error { font-size: 13px; color: var(--err); }
     .working { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--muted); }
     .working .ring { position: relative; width: 26px; height: 26px; flex: none; }

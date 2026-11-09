@@ -19,7 +19,7 @@ Setup is two steps: enable the plugin, then send `/chrome pair` and paste the co
 Install Hermes Chrome for me: read https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/AGENT_INSTALL.md and follow it.
 ```
 
-**Updating:** when a newer version is out, the extension shows an **↑** badge and an "update available" banner in its side panel, and your agent mentions it once. Send your agent `Update Hermes Chrome: read https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/AGENT_INSTALL.md and follow it.`, then unzip the new extension over the old folder and press **Reload extension** in the banner.
+**Updating:** when a newer version is out, the extension shows an **↑** badge and an "update available" banner in its side panel. With the one-time update helper installed, press **Update now** and the extension updates and reloads itself. See [Updating](#updating).
 
 The extension connects out to Hermes, so your laptop needs no open ports. When the laptop is asleep or Chrome is closed, the tools return one plain message (default `Browser not available`) and the agent tells you instead of guessing.
 
@@ -136,6 +136,8 @@ plugins:
 
 If Hermes runs on the same computer, the short code alone works (`HC-7Q2K-9XPM`).
 
+Optional, once: install the [update helper](#updating) so later updates are one click.
+
 ### Reach Hermes from anywhere (no Tailscale)
 
 If Hermes runs on a server and you'd rather not set up Tailscale, put it behind an HTTPS tunnel and tell the plugin its public address:
@@ -177,6 +179,23 @@ npx hermes-chrome-bridge pair              # prints a pairing code
 ```
 
 Point your MCP client at `http://127.0.0.1:8798/mcp`. Variables: `HC_PORT`, `HC_AGENT_NAME`, `HC_UNAVAILABLE_MESSAGE`, `HC_STATE_DIR`, `HC_MCP_TOKEN`, `HC_MCP_ALLOW_REMOTE`, and `HC_HERMES_URL` / `HC_HERMES_KEY` for side-panel chat against a Hermes API server. A systemd unit is in [`deploy/`](deploy/hermes-chrome-bridge.service).
+
+## Updating
+
+When your Hermes plugin is newer than the extension, the toolbar icon shows **↑** and the side panel (and Settings) show an "update available" banner.
+
+1. **Plugin**: send your agent `Update Hermes Chrome: read https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/AGENT_INSTALL.md and follow it.`
+2. **Extension**: press **Update now** in the banner. It downloads the latest release, checks it, replaces the extension's files and reloads the extension. Pairing, settings and recordings stay.
+
+**Update now** needs the small update helper, installed once on the computer that runs the browser (macOS or Linux, Python 3, no admin rights). An unpacked extension cannot rewrite its own files, so the helper does it for it. Run this after you have loaded the extension:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/updater/install.sh | bash
+```
+
+It looks for Hermes Chrome in Google Chrome, Chromium, Brave, Microsoft Edge and Arc, puts the helper in `~/.hermes-chrome-updater/` and registers it with each browser that has the extension. Run it again if you load the extension from a different folder. `bash install.sh --dir <folder> --id <extension id>` sets the folder by hand, and `--uninstall` removes everything it added. A folder inside a git clone is skipped: update that with `git pull`. What the helper may do is in [SECURITY.md](SECURITY.md#update-helper).
+
+Without the helper, the banner offers the manual way: **Download** the zip, unzip it over your current extension folder, and press **Reload extension**. The first update to a version with **Update now** is always manual, because older versions do not have it.
 
 ## Development
 
