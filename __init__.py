@@ -39,7 +39,8 @@ def register(ctx):
     cache = {"at": 0.0, "status": {}}
     told_update = set()  # (browser id, extension version) the agent was already told about
 
-    def hint(**_):
+    def hint(user_message=None, **_):
+        hub.note_request(user_message)
         if time.time() - cache["at"] > 5:
             cache.update(at=time.time(), status=hub.status())
         st = cache["status"]

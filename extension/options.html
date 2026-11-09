@@ -46,6 +46,7 @@
       </select></label>
     <label>Blocked sites <small>The agent refuses to open or act on these hosts (and their subdomains). One per line, e.g. mybank.com. Starts with password-manager vaults.</small>
       <textarea id="blockedHosts"></textarea></label>
+    <label class="check"><input id="checkActions" type="checkbox"> <span>Check risky actions against my request <small><br>Before a risky click, a form submit or sending data to a new site, your agent's own model checks it fits what you asked. If not, you see why and decide. Needs the Hermes plugin.</small></span></label>
     <label class="check"><input id="askNewSites" type="checkbox"> <span>Ask before acting on a new site <small><br>The agent can read any page, but its first click or keystroke on a site you have not approved asks: Decline, Allow once (this task) or Always allow.</small></span></label>
     <label>Sites it may act on <small>Added when you press Always allow. Delete a line to take the permission back.</small>
       <textarea id="allowedHosts"></textarea></label>

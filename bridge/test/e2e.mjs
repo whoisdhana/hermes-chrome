@@ -374,6 +374,27 @@ try {
     assert.match(moved, /page changed to .*\/two.*steps 2 to 2/s);
     await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/` });
   });
+  await step('action check: a "no" is shown with the reason; the user decides', async () => {
+    const p = testPage();
+    await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/` });
+    const o = (await call('read_page', { tabId })).text;
+    await sw.evaluate(() => { globalThis.__origCheck = requestIntentCheck; requestIntentCheck = async () => ({ ok: false, reason: 'You did not ask to delete anything.' }); });
+    let pending = call('click', { tabId, ref: refOf(o, /Delete account/), why: 'Cleaning up' }).then(() => 'resolved', (e) => e.message);
+    await sleep(1500);
+    await p.keyboard.press('Enter'); // Deny
+    assert.match(await pending, /Blocked: You did not ask to delete anything/);
+    pending = call('click', { tabId, ref: refOf(o, /Delete account/), why: 'Cleaning up' }).then(() => 'resolved', (e) => e.message);
+    await sleep(1500);
+    await p.keyboard.press('Tab'); await p.keyboard.press('Enter'); // Allow anyway
+    assert.equal(await pending, 'resolved', 'one prompt only: the risky-click prompt is not shown again');
+    assert.match((await call('get_text', { tabId })).text, /DELETED/);
+    pending = call('navigate', { tabId, url: `http://localhost:${PAGE_PORT}/?data=secret`, why: 'Opening the next site' }).then(() => 'resolved', (e) => e.message);
+    await sleep(1500);
+    await p.keyboard.press('Enter'); // Deny
+    assert.match(await pending, /Blocked/, 'data-carrying navigation to another host is checked');
+    await sw.evaluate(() => { requestIntentCheck = globalThis.__origCheck; });
+    await call('report', { summary: 'Checked' });
+  });
   await step('teach: record a task, save it, replay it with a variable', async () => {
     const p = testPage();
     await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/` });

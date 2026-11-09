@@ -113,7 +113,7 @@ class FakeExtension:
     async def _loop(self):
         async for m in self.ws:
             data = json.loads(m.data)
-            if data.get("type") in ("chat_event", "chat_meta", "skill_saved", "recordings", "recording_run"):
+            if data.get("type") in ("chat_event", "chat_meta", "skill_saved", "recordings", "recording_run", "intent_result"):
                 self.events.append(data)
             elif "id" in data:
                 self.calls.append(data)
@@ -389,6 +389,55 @@ class UpdateNoticeTest(unittest.TestCase):
         self.assertIn("older than this plugin", first)
         self.assertIn(hub_mod.EXTENSION_DOWNLOAD, first)
         self.assertNotIn("older than this plugin", ctx.hooks["pre_llm_call"](session_id="s"), "said once, not every turn")
+
+
+class IntentCheckTest(unittest.TestCase):
+    """Risky actions are checked against the user's latest message with the user's own model."""
+    PORT = 18794
+
+    def test_judge_and_websocket_round_trip(self):
+        ctx = FakeCtx(tempfile.mkdtemp(), {"port": self.PORT, "advertise_host": "127.0.0.1", "agent_name": "Delulu"})
+        answers = []
+
+        class FakeLlm:
+            def complete(self, messages, **kw):
+                answers.append(messages)
+                reply = next_reply.pop(0)
+                if isinstance(reply, Exception):
+                    raise reply
+                return type("R", (), {"text": reply})()
+        next_reply = []
+        ctx.llm = FakeLlm()
+        plugin.register(ctx)
+        hub = ctx.tools["chrome_open"].__closure__[0].cell_contents
+        self.assertTrue(wait_for(lambda: hub.owner))
+        check = {"action": "click", "target": 'button "Send"', "url": "https://mail.example.com", "why": "Sending the email"}
+
+        self.assertEqual(hub.judge(check), {"ok": True, "skipped": "no recent request"})
+        ctx.hooks["pre_llm_call"](session_id="s", user_message="Summarise my inbox, do not send anything")
+        next_reply.append('Sure: {"ok": false, "reason": "You asked for a summary, not to send an email."}')
+        self.assertEqual(hub.judge(check), {"ok": False, "reason": "You asked for a summary, not to send an email."})
+        self.assertIn("Summarise my inbox", answers[-1][1]["content"], "the user's request goes to the model")
+        self.assertIn('button "Send"', answers[-1][1]["content"])
+        next_reply.append('{"ok": true}')
+        self.assertEqual(hub.judge(check), {"ok": True})
+        next_reply.append(RuntimeError("no auth"))
+        self.assertEqual(hub.judge(check), {"ok": True, "skipped": "check unavailable"}, "a broken model never blocks")
+
+        code = next(l for l in ctx.commands["chrome"]("pair").splitlines() if l.startswith("HC-"))
+        ext = FakeExtension(self.PORT)
+        paired = ext.run(ext.pair(code))
+        welcome = ext.run(ext.connect(paired["deviceId"], paired["deviceKey"]))
+        self.assertTrue(welcome["intentCheck"])
+        next_reply.append('{"ok": false, "reason": "Not asked for."}')
+
+        # FakeExtension only records chat-type events; listen on the raw socket instead
+        async def ask_raw():
+            await ext.ws.send_json({"type": "intent_check", "id": "c1", **check})
+        ext.run(ask_raw())
+        self.assertTrue(wait_for(lambda: any(e.get("type") == "intent_result" for e in ext.events), 5))
+        res = next(e for e in ext.events if e.get("type") == "intent_result")
+        self.assertEqual((res["id"], res["ok"], res["reason"]), ("c1", False, "Not asked for."))
 
 
 class TunnelTest(unittest.TestCase):

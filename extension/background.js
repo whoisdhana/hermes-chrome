@@ -21,6 +21,7 @@ const DEFAULTS = {
   watchHosts: '',   // every click, keystroke and form submit needs the user's OK on these hosts
   askNewSites: true, // first click/type/key on a site not in allowedHosts asks: Decline / Allow once / Always allow
   allowedHosts: '',
+  checkActions: true, // ask the agent's model whether risky actions fit the user's request (Hermes plugin only)
 };
 
 // Starter lists, added once on install or update (users edit them in Settings). Password-manager vaults
@@ -65,7 +66,9 @@ async function connect() {
   sock.onmessage = (e) => {
     let m;
     try { m = JSON.parse(e.data); } catch { return; }
+    if (m.type === 'intent_result') { intentWaiters.get(m.id)?.(m); intentWaiters.delete(m.id); return; }
     if (m.type === 'welcome') {
+      canCheck = !!m.intentCheck;
       const updateNote = versionNote(m.pluginVersion);
       chrome.storage.local.set({ agentName: m.agentName || 'Hermes', pairError: '', updateNote }).then(() => setBadge('on'));
     }
@@ -471,6 +474,47 @@ async function maybeAskSite(tab) {
   throw new Error(`The user did not allow acting on ${host} (${answer}). You can still read it. Ask them before trying again.`);
 }
 
+// Action check: before a risky click, a form submit or carrying data to a new site, the Hermes plugin asks the
+// user's own model whether the action fits what the user asked for. A "no" is shown to the user with the reason;
+// they can still allow it. No checker (bridge, old plugin, no model): the usual approvals still apply.
+let canCheck = false;
+const intentWaiters = new Map();
+const checkedHosts = new Set(); // navigation targets that passed the check during this task
+async function requestIntentCheck(check) {
+  if (!canCheck || ws?.readyState !== 1) return { ok: true, skipped: 'no checker' };
+  const id = crypto.randomUUID();
+  return new Promise((resolve) => {
+    const t = setTimeout(() => { intentWaiters.delete(id); resolve({ ok: true, skipped: 'timeout' }); }, 45_000);
+    intentWaiters.set(id, (r) => { clearTimeout(t); resolve(r); });
+    ws.send(JSON.stringify({ type: 'intent_check', id, ...check }));
+  });
+}
+// Returns 'ok', or 'asked' when the user approved it in the page (callers then skip a second prompt).
+async function checkIntent(tabId, check) {
+  const s = await settings();
+  if (!s.checkActions) return 'ok';
+  const v = await requestIntentCheck(check);
+  if (v.ok) return 'ok';
+  logActivity(tabId, 'check', `Held back: ${v.reason}`);
+  if (tabId == null) throw new Error(`Blocked: ${v.reason} Ask the user before trying again.`);
+  await setGroupStatus('✋');
+  notify(`${s.agentName} needs your OK`, v.reason, tabId);
+  needsYou++; refreshIndicators();
+  const answer = await page(tabId, 'confirm', { message: `${v.reason} Allow ${s.agentName} to ${check.action} ${check.target || ''} anyway?`.replace(/\s+/g, ' '), timeoutSec: 120 })
+    .finally(() => { needsYou--; refreshIndicators(); });
+  if (answer !== 'allow') throw new Error(`Blocked: ${v.reason} The user did not allow it. Do not try another way; ask them.`);
+  return 'asked';
+}
+// Navigation that could carry data off to another site (a different host, with a query string) is checked once per host.
+async function checkNavigation(tabId, fromUrl, url, why) {
+  let to, from;
+  try { to = new URL(url); } catch { return; }
+  try { from = new URL(fromUrl).hostname; } catch { from = ''; }
+  if (to.hostname === from || to.search.length < 2 || checkedHosts.has(to.hostname)) return;
+  await checkIntent(tabId, { action: 'go to', target: url, url: fromUrl, why });
+  checkedHosts.add(to.hostname);
+}
+
 // Risky clicks anywhere, and every action on a watched site (webmail, payments, banks), wait for the user's OK.
 async function maybeConfirm(tabId, desc, url, action = 'click') {
   const s = await settings();
@@ -706,6 +750,8 @@ const METHODS = {
       const main = await mainTab();
       if (main) return METHODS.navigate({ tabId: main.id, url, why });
     }
+    const from = lastTabId != null ? await chrome.tabs.get(lastTabId).catch(() => null) : null;
+    await checkNavigation(from?.id ?? null, from?.url || '', url, why);
     const gid = await groupId();
     let windowId;
     if (gid != null) windowId = (await chrome.tabGroups.get(gid)).windowId;
@@ -732,6 +778,7 @@ const METHODS = {
   async navigate({ tabId, url, why }) {
     refuseUnsafeUrl(url);
     const tab = await resolveTab(tabId);
+    if (url !== 'back' && url !== 'forward') await checkNavigation(tab.id, tab.url, url, why);
     if (url === 'back') await chrome.tabs.goBack(tab.id);
     else if (url === 'forward') await chrome.tabs.goForward(tab.id);
     else {
@@ -792,7 +839,8 @@ const METHODS = {
       }
     } else if (x == null || y == null) throw new Error('click needs a ref or x and y');
     await maybeAskSite(tab);
-    await maybeConfirm(tab.id, desc, tab.url);
+    const checked = RISKY.test(desc) ? await checkIntent(tab.id, { action: 'click', target: desc.replace(/^e\d+ /, ''), url: tab.url, why }) : 'ok';
+    if (checked !== 'asked') await maybeConfirm(tab.id, desc, tab.url);
     await acting(tab.id, async () => {
       await pointAt(tab.id, x, y, ref, why);
       await Promise.all([pageQuiet(tab.id, 'press', { x, y }), mouseClick(tab.id, x, y, { button, clickCount: double ? 2 : 1 })]);
@@ -805,6 +853,7 @@ const METHODS = {
   async type({ tabId, ref, text, clear, submit, why, secret }) {
     const tab = await resolveTab(tabId);
     await maybeAskSite(tab);
+    if (submit) await checkIntent(tab.id, { action: 'type and submit', target: secret ? 'a hidden value' : `"${text.slice(0, 200)}"`, url: tab.url, why });
     await maybeConfirm(tab.id, `${secret ? 'a hidden value' : `"${text.length > 40 ? text.slice(0, 39) + '…' : text}"`}${submit ? ' and submit' : ''}`, tab.url, 'type');
     await acting(tab.id, () => typeInto(tab, { ref, text, clear, submit, why }));
     const t = submit ? await afterAction(tab.id) : null;
@@ -932,6 +981,7 @@ const METHODS = {
     const images = run.filter((a) => a.thumb).slice(-3).map((a) => ({ data: a.thumb, label: a.label }));
     hud.plan = null;
     onceHosts.clear();
+    checkedHosts.clear();
     const closed = await closeExtraTabs();
     await setGroupStatus('✅');
     pushHud();
