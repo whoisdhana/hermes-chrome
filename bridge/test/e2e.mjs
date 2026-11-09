@@ -303,19 +303,20 @@ try {
     await call('report', { summary: 'Refused the warning page' }); // closes the extra tab
   });
   const testPage = () => ctx.pages().find((pg) => pg.url().startsWith(`http://127.0.0.1:${PAGE_PORT}`));
-  await step('plan strip, intent caption, tab group progress', async () => {
+  await step('plan strip, tab group progress', async () => {
     await call('plan', { steps: ['Open the form', 'Fill in the name', 'Submit'] });
     await call('plan', { done: 1 });
     await testPage().bringToFront();
     outline = (await call('read_page', { tabId })).text;
     const pending = call('click', { tabId, ref: refOf(outline, /button "Continue"/), why: 'Submitting the form' });
     await sleep(500);
-    await testPage().screenshot({ path: path.join(SHOTS, 'hc-plan-intent.png') });
+    await testPage().screenshot({ path: path.join(SHOTS, 'hc-plan.png') });
     await pending;
     const titles = await sw.evaluate(() => chrome.tabGroups.query({}).then((g) => g.map((x) => x.title)));
     assert.ok(titles.some((t) => /Delulu 2\/3/.test(t)), `group titles: ${titles}`);
     // the agent's tab is marked next to the address bar (toolbar badge) and in the tab strip (favicon dot)
     assert.equal(await sw.evaluate((id) => chrome.action.getBadgeText({ tabId: id }), tabId), '●');
+    assert.equal(await sw.evaluate((id) => chrome.action.getTitle({ tabId: id }), tabId), 'Hermes Chrome', 'no per-tab hover text');
     await testPage().waitForSelector('link[data-hermes-chrome]', { state: 'attached', timeout: 5000 });
     assert.match(await testPage().getAttribute('link[data-hermes-chrome]', 'href'), /^data:image\/png;base64,/);
   });

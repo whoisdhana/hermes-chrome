@@ -153,7 +153,6 @@ async function setBadge(state) {
   const [text, color] = map[state];
   chrome.action.setBadgeText({ text });
   chrome.action.setBadgeBackgroundColor({ color });
-  chrome.action.setTitle({ title: state === 'update' ? 'Hermes Chrome: update available' : chrome.runtime.getManifest().action.default_title });
 }
 
 // The plugin tells us its version on connect. A newer plugin means a newer extension is out (they ship together);
@@ -387,9 +386,9 @@ async function moveMouse(tabId, x, y) {
 }
 
 // Point at a target: visible cursor and (in human pace) the real pointer travel together.
-async function pointAt(tabId, x, y, ref, why) {
+async function pointAt(tabId, x, y, ref) {
   const { humanPace } = await settings();
-  await Promise.all([page(tabId, 'pointAt', { x, y, ref, why }), humanPace ? moveMouse(tabId, x, y) : null]);
+  await Promise.all([page(tabId, 'pointAt', { x, y, ref }), humanPace ? moveMouse(tabId, x, y) : null]);
   if (humanPace) await sleep(rand(80, 220));
 }
 
@@ -557,9 +556,9 @@ let ownedUntil = 0;
 let needsYou = 0;          // >0 while a handoff or approval is waiting for the human
 let marked = null;         // {tabId, state} currently drawn
 const MARK = {
-  working: { badge: '●', color: '#BA583D', title: (n) => `${n} is working in this tab` },
-  paused: { badge: 'II', color: '#8A7E73', title: (n) => `${n} is paused in this tab` },
-  needs: { badge: '!', color: '#DC2626', title: (n) => `${n} needs you in this tab` },
+  working: { badge: '●', color: '#BA583D' },
+  paused: { badge: 'II', color: '#8A7E73' },
+  needs: { badge: '!', color: '#DC2626' },
 };
 const faviconCache = new Map(); // `${pageUrl}|${state}` -> data URL
 
@@ -580,11 +579,9 @@ async function faviconWithDot(pageUrl, color) {
 async function drawMark(tabId, state) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   if (!tab) return;
-  const { agentName } = await settings();
   const m = MARK[state];
   chrome.action.setBadgeText({ tabId, text: m.badge });
   chrome.action.setBadgeBackgroundColor({ tabId, color: m.color });
-  chrome.action.setTitle({ tabId, title: m.title(agentName) });
   if (/^https?:/.test(tab.url || '')) {
     const key = `${tab.url}|${state}`;
     if (!faviconCache.has(key)) faviconCache.set(key, await faviconWithDot(tab.url, m.color));
@@ -595,7 +592,6 @@ async function drawMark(tabId, state) {
 
 function clearMark(tabId) {
   chrome.action.setBadgeText({ tabId, text: null }).catch(() => {}); // null = back to the global connection badge
-  chrome.action.setTitle({ tabId, title: chrome.runtime.getManifest().action.default_title }).catch(() => {});
   pageQuiet(tabId, 'favicon', { dataUrl: null });
 }
 
@@ -763,7 +759,6 @@ const METHODS = {
     await waitForLoad(tab.id);
     refuseCertError(tab.id);
     pushHud();
-    if (why) pageQuiet(tab.id, 'intent', { text: why });
     await readingPause();
     logActivity(tab.id, 'open', why || `Opened ${hostOf(url)}`);
     return ok(summary(await chrome.tabs.get(tab.id)));
@@ -783,7 +778,6 @@ const METHODS = {
     else if (url === 'forward') await chrome.tabs.goForward(tab.id);
     else {
       if (await hostBlocked(url)) throw new Error(`The user has blocked the agent on ${new URL(url).hostname}.`);
-      if (why) await pageQuiet(tab.id, 'intent', { text: why });
       await pageQuiet(tab.id, 'navToast', { url });
       await sleep(350);
       await chrome.tabs.update(tab.id, { url });
@@ -842,7 +836,7 @@ const METHODS = {
     const checked = RISKY.test(desc) ? await checkIntent(tab.id, { action: 'click', target: desc.replace(/^e\d+ /, ''), url: tab.url, why }) : 'ok';
     if (checked !== 'asked') await maybeConfirm(tab.id, desc, tab.url);
     await acting(tab.id, async () => {
-      await pointAt(tab.id, x, y, ref, why);
+      await pointAt(tab.id, x, y, ref);
       await Promise.all([pageQuiet(tab.id, 'press', { x, y }), mouseClick(tab.id, x, y, { button, clickCount: double ? 2 : 1 })]);
     });
     const t = await afterAction(tab.id);
@@ -865,7 +859,6 @@ const METHODS = {
     const tab = await resolveTab(tabId);
     await maybeAskSite(tab);
     await maybeConfirm(tab.id, key, tab.url, 'press');
-    if (why) pageQuiet(tab.id, 'intent', { text: why });
     await acting(tab.id, () => pressKey(tab.id, key));
     const t = await afterAction(tab.id);
     logActivity(tab.id, 'key', why || `Pressed ${key}`);
@@ -877,12 +870,12 @@ const METHODS = {
     return acting(tab.id, async () => {
       if (ref) {
         const { x, y, desc } = await page(tab.id, 'locate', { ref });
-        await pointAt(tab.id, x, y, ref, why);
+        await pointAt(tab.id, x, y, ref);
         return ok(`scrolled ${desc} into view`);
       }
       const { w, h } = await page(tab.id, 'viewport');
       const x = Math.round(w / 2), y = Math.round(h / 2);
-      await pointAt(tab.id, x, y, null, why);
+      await pointAt(tab.id, x, y, null);
       const d = { up: [0, -amount], down: [0, amount], left: [-amount, 0], right: [amount, 0] }[direction];
       await cdp(tab.id, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: d[0], deltaY: d[1] });
       await sleep(400);
@@ -1042,7 +1035,7 @@ async function replayStep(st, why) {
   if (st.action === 'type') return METHODS.type({ ref, text: String(st.value ?? ''), clear: true, why });
   if (st.action === 'select') {
     const { x, y } = await page(tab.id, 'locate', { ref });
-    await acting(tab.id, () => pointAt(tab.id, x, y, ref, why));
+    await acting(tab.id, () => pointAt(tab.id, x, y, ref));
     if (!(await page(tab.id, 'selectOption', { ref, value: st.value }))) throw new Error(`option "${st.label || st.value}" is not available`);
     return logActivity(tab.id, 'select', why);
   }
@@ -1052,7 +1045,7 @@ async function replayStep(st, why) {
 async function typeInto(tab, { ref, text, clear, submit, why }) {
   if (ref) {
     const { x, y } = await page(tab.id, 'locate', { ref });
-    await pointAt(tab.id, x, y, ref, why);
+    await pointAt(tab.id, x, y, ref);
     await Promise.all([pageQuiet(tab.id, 'press', { x, y }), mouseClick(tab.id, x, y)]);
     if (clear) await page(tab.id, 'clearField', { ref });
   }
