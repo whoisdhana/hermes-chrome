@@ -95,6 +95,7 @@ try {
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
   globalThis.__sw = sw;
   const extId = new URL(sw.url()).host;
+  await sw.evaluate(() => chrome.storage.local.set({ allowedHosts: '127.0.0.1' })); // the test page; the new-site prompt has its own step
   const health = () => fetch(`http://127.0.0.1:${PORT}/health`).then((r) => r.json());
 
   const options = await ctx.newPage();
@@ -244,6 +245,23 @@ try {
     assert.match((await call('navigate', { tabId, url: 'back' })).text, /HC test/);
   });
   await step('press_key', async () => assert.match((await call('press_key', { tabId, key: 'Tab', why: 'Moving to the next field' })).text, /pressed Tab/));
+  await step('new site: Decline, Allow once (until report), Always allow', async () => {
+    const p = ctx.pages().find((pg) => pg.url().startsWith(`http://127.0.0.1:${PAGE_PORT}`));
+    const key = () => call('press_key', { tabId, key: 'Tab', why: 'Moving to the next field' }).then(() => 'resolved', (e) => e.message);
+    const answer = async (tabs) => { await sleep(1500); for (let i = 0; i < tabs; i++) await p.keyboard.press('Tab'); await p.keyboard.press('Enter'); };
+    await sw.evaluate(() => chrome.storage.local.set({ allowedHosts: '' }));
+    let pending = key(); await answer(0); // Decline has focus
+    assert.match(await pending, /did not allow acting on 127\.0\.0\.1/);
+    pending = key(); await answer(1); // Allow once
+    assert.equal(await pending, 'resolved');
+    assert.equal(await key(), 'resolved', 'no second prompt within the task');
+    await call('report', { summary: 'Task done' }); // ends the "once"
+    pending = key(); await answer(2); // Always allow
+    assert.equal(await pending, 'resolved');
+    assert.equal(await sw.evaluate(() => chrome.storage.local.get('allowedHosts').then((s) => s.allowedHosts)), '127.0.0.1');
+    await call('report', { summary: 'Task done' });
+    assert.equal(await key(), 'resolved', 'always allowed survives the end of the task');
+  });
   await step('click, type and key without a real why are refused', async () => {
     for (const why of [undefined, '', 'click', 'Next']) {
       await assert.rejects(call('press_key', { tabId, key: 'Tab', ...(why === undefined ? {} : { why }) }), /why/i, String(why));

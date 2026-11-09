@@ -19,6 +19,8 @@ const DEFAULTS = {
   humanPace: true,
   keepTabs: false, // keep the extra tabs open after a task instead of closing them
   watchHosts: '',   // every click, keystroke and form submit needs the user's OK on these hosts
+  askNewSites: true, // first click/type/key on a site not in allowedHosts asks: Decline / Allow once / Always allow
+  allowedHosts: '',
 };
 
 // Starter lists, added once on install or update (users edit them in Settings). Password-manager vaults
@@ -426,6 +428,27 @@ async function afterAction(tabId) {
   return t;
 }
 
+// Per-site permission: reading is fine anywhere that is not blocked, but the first action on a new site asks.
+// "Allow once" lasts until the task ends (chrome_report); "Always allow" adds the site to Settings → Sites it may act on.
+const onceHosts = new Set();
+async function maybeAskSite(tab) {
+  const s = await settings();
+  const host = (() => { try { return new URL(tab.url).hostname; } catch { return ''; } })();
+  if (!s.askNewSites || !host || onceHosts.has(host) || hostIn(s.allowedHosts, tab.url) || await hostWatched(tab.url)) return;
+  await setGroupStatus('✋');
+  notify(`${s.agentName} wants to act on ${host}`, 'Allow it in the browser tab.', tab.id);
+  needsYou++; refreshIndicators();
+  const answer = await page(tab.id, 'siteAsk', { message: `Let ${s.agentName} click and type on ${host}?`, timeoutSec: 120 })
+    .finally(() => { needsYou--; refreshIndicators(); });
+  logActivity(tab.id, 'permission', `${host}: ${{ always: 'always allowed', once: 'allowed for this task', deny: 'declined', timeout: 'no answer' }[answer] || answer}`);
+  if (answer === 'once') return void onceHosts.add(host);
+  if (answer === 'always') {
+    const cur = (await chrome.storage.local.get({ allowedHosts: '' })).allowedHosts;
+    return void await chrome.storage.local.set({ allowedHosts: [...new Set([...cur.split(/[\s,]+/).filter(Boolean), host])].join('\n') });
+  }
+  throw new Error(`The user did not allow acting on ${host} (${answer}). You can still read it. Ask them before trying again.`);
+}
+
 // Risky clicks anywhere, and every action on a watched site (webmail, payments, banks), wait for the user's OK.
 async function maybeConfirm(tabId, desc, url, action = 'click') {
   const s = await settings();
@@ -746,6 +769,7 @@ const METHODS = {
         y = Math.round(y + rand(-0.5, 0.5) * Math.min(h * 0.4, 8));
       }
     } else if (x == null || y == null) throw new Error('click needs a ref or x and y');
+    await maybeAskSite(tab);
     await maybeConfirm(tab.id, desc, tab.url);
     await acting(tab.id, async () => {
       await pointAt(tab.id, x, y, ref, why);
@@ -758,6 +782,7 @@ const METHODS = {
 
   async type({ tabId, ref, text, clear, submit, why, secret }) {
     const tab = await resolveTab(tabId);
+    await maybeAskSite(tab);
     await maybeConfirm(tab.id, `${secret ? 'a hidden value' : `"${text.length > 40 ? text.slice(0, 39) + '…' : text}"`}${submit ? ' and submit' : ''}`, tab.url, 'type');
     await acting(tab.id, () => typeInto(tab, { ref, text, clear, submit, why }));
     const t = submit ? await afterAction(tab.id) : null;
@@ -767,6 +792,7 @@ const METHODS = {
 
   async press_key({ tabId, key, why }) {
     const tab = await resolveTab(tabId);
+    await maybeAskSite(tab);
     await maybeConfirm(tab.id, key, tab.url, 'press');
     if (why) pageQuiet(tab.id, 'intent', { text: why });
     await acting(tab.id, () => pressKey(tab.id, key));
@@ -851,6 +877,7 @@ const METHODS = {
       pages: [...new Set(run.map((a) => hostOf(a.url || '')))].filter(Boolean) };
     const images = run.filter((a) => a.thumb).slice(-3).map((a) => ({ data: a.thumb, label: a.label }));
     hud.plan = null;
+    onceHosts.clear();
     const closed = await closeExtraTabs();
     await setGroupStatus('✅');
     pushHud();

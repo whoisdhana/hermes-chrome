@@ -45,6 +45,9 @@
       </select></label>
     <label>Blocked sites <small>The agent refuses to open or act on these hosts (and their subdomains). One per line, e.g. mybank.com. Starts with password-manager vaults.</small>
       <textarea id="blockedHosts"></textarea></label>
+    <label class="check"><input id="askNewSites" type="checkbox"> <span>Ask before acting on a new site <small><br>The agent can read any page, but its first click or keystroke on a site you have not approved asks: Decline, Allow once (this task) or Always allow.</small></span></label>
+    <label>Sites it may act on <small>Added when you press Always allow. Delete a line to take the permission back.</small>
+      <textarea id="allowedHosts"></textarea></label>
     <label>Ask me first on these sites <small>Every click, keystroke and form submit on these hosts waits for your OK. Starts with webmail, payment apps, banks and brokers. One per line.</small>
       <textarea id="watchHosts"></textarea></label>
     <label class="check"><input id="humanPace" type="checkbox"> <span>Human pace <small><br>Real mouse movement, one key at a time, short pauses. Slower, but sites react as they would to you.</small></span></label>
