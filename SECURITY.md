@@ -31,7 +31,8 @@ What a recording never contains: passwords, card numbers, CVV, IBAN, SSN, accoun
 ## Network
 
 - The extension connects **out** to your Hermes plugin (`ws://<host>:8798/ext`). Nothing listens on your laptop.
-- Use it on the same machine, a LAN, or a private network such as Tailscale. **Do not expose port 8798 to the internet.** The connection is not TLS-encrypted, so it relies on that private network.
+- Use it on the same machine, a LAN, or a private network such as Tailscale. **Do not expose port 8798 to the internet.** That connection is not TLS-encrypted, so it relies on the private network.
+- To reach Hermes over the internet, put it behind an HTTPS tunnel and set `public_url`: the extension then connects with `wss://` (TLS), the plugin listens on loopback only, and its internal endpoints refuse requests that carry proxy headers, so only the extension endpoint `/ext` is reachable. A paired device key is still required for everything.
 - Credentials never go in URLs: the pairing code and device key are sent inside the WebSocket after it opens.
 - Pairing codes are single use, expire after 5 minutes, and five wrong attempts cancel all open codes. On Telegram the message with the code deletes itself after 5 minutes.
 - The plugin's internal RPC and the bridge's `/mcp` endpoint accept loopback (same machine) callers only.

@@ -362,6 +362,41 @@ class PluginTest(unittest.TestCase):
         self.assertIsNone(self.ctx.hooks["pre_llm_call"](session_id="s"), "no paired browsers left: no hint")
 
 
+class TunnelTest(unittest.TestCase):
+    """public_url: Hermes behind an HTTPS tunnel, so no Tailscale/LAN is needed."""
+    PORT = 18797
+
+    def test_ext_url(self):
+        f = hub_mod.ext_url
+        self.assertEqual(f("https://chrome.example.com"), "wss://chrome.example.com/ext")
+        self.assertEqual(f("https://chrome.example.com/"), "wss://chrome.example.com/ext")
+        self.assertEqual(f("chrome.example.com"), "wss://chrome.example.com/ext")
+        self.assertEqual(f("http://box.local:8080/hc/ext"), "ws://box.local:8080/hc/ext")
+        self.assertEqual(f("wss://x.ts.net/ext"), "wss://x.ts.net/ext")
+
+    def test_pairing_and_proxy_guard(self):
+        ctx = FakeCtx(tempfile.mkdtemp(), {"port": self.PORT, "public_url": "https://chrome.example.com", "agent_name": "Delulu"})
+        plugin.register(ctx)
+        hub = ctx.tools["chrome_open"].__closure__[0].cell_contents
+        self.assertTrue(wait_for(lambda: hub.owner))
+        code = next(l for l in ctx.commands["chrome"]("pair").splitlines() if l.startswith("HC-"))
+        self.assertRegex(code, r"^HC-[2-9A-Z]{4}-[2-9A-Z]{4}@wss://chrome\.example\.com/ext$")
+        self.assertEqual(hub.status()["address"], "wss://chrome.example.com/ext")
+        ext = FakeExtension(self.PORT)
+        self.assertEqual(ext.run(ext.pair(code))["type"], "paired", "the code still pairs through the local listener")
+
+        async def get(path, headers):
+            async with ClientSession() as s:
+                async with s.request("POST" if path == "/rpc" else "GET", f"http://127.0.0.1:{self.PORT}{path}", headers=headers,
+                                     json={"method": "__status"} if path == "/rpc" else None) as r:
+                    return r.status
+        secret = {"X-HC-Secret": ctx.state.get("rpc_secret")}
+        self.assertEqual(run_async(get("/rpc", secret)), 200)
+        for h in ({"Cf-Connecting-Ip": "203.0.113.5"}, {"X-Forwarded-For": "203.0.113.5"}):
+            self.assertEqual(run_async(get("/rpc", {**secret, **h})), 403, f"/rpc through a tunnel ({h})")
+            self.assertEqual(run_async(get("/health", h)), 403, f"/health through a tunnel ({h})")
+
+
 class TelegramPairTest(unittest.TestCase):
     """/chrome_pair on Telegram: the plugin sends the code itself and deletes the message later."""
 

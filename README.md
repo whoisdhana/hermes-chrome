@@ -81,7 +81,7 @@ Read [SECURITY.md](SECURITY.md) for exactly what data is stored where and what l
 - **Blocked sites**: hosts the agent refuses to open or touch (your bank, for example).
 - **Risky clicks** (pay, buy, delete, send, publish, post…) show an Allow / Deny banner first. Deny is the default focus.
 - **Pairing**: codes are single use, expire after 5 minutes (on Telegram the code message deletes itself then), and five wrong attempts cancel all open codes. Each browser gets its own key; Hermes stores only its hash. `/chrome devices` lists them, `/chrome revoke <name>` cuts one off immediately. Nothing secret ever goes in a URL.
-- Use Tailscale or a LAN between laptop and server; do not expose the port to the internet.
+- Use Tailscale, a LAN, or an HTTPS tunnel with `public_url` (see Setup) between laptop and server; never expose the raw port to the internet.
 - The agent never solves CAPTCHAs; it hands them to you.
 - **Stop agent** (right-click the toolbar icon) disconnects immediately.
 
@@ -119,6 +119,36 @@ plugins:
 4. Right-click the extension icon → **Settings**, paste the code under **Pair**. The badge turns green.
 
 If Hermes runs on the same computer, the short code alone works (`HC-7Q2K-9XPM`).
+
+### Reach Hermes from anywhere (no Tailscale)
+
+If Hermes runs on a server and you'd rather not set up Tailscale, put it behind an HTTPS tunnel and tell the plugin its public address:
+
+```yaml
+plugins:
+  entries:
+    hermes-chrome:
+      settings:
+        public_url: https://chrome.example.com   # pairing codes become HC-XXXX-XXXX@wss://chrome.example.com/ext
+```
+
+Restart the gateway. With `public_url` set the plugin listens on `127.0.0.1:8798` only; point the tunnel there with WebSockets on. Pairing works the same way, and TLS protects the device key on the way.
+
+Cloudflare named tunnel (`~/.cloudflared/config.yml`), exposing only the extension endpoint:
+
+```yaml
+ingress:
+  - hostname: chrome.example.com
+    path: ^/ext$
+    service: http://127.0.0.1:8798
+  - service: http_status:404
+```
+
+Tailscale Funnel works too (`tailscale funnel --bg 8798`, then `public_url: https://<machine>.<tailnet>.ts.net`), and so does any reverse proxy that passes WebSockets (Caddy, nginx, ngrok with a fixed domain).
+
+- Use a fixed hostname. Throwaway URLs (`trycloudflare.com`, free ngrok) change on restart and break the pairing.
+- Only `/ext` answers requests that arrive through a tunnel; the plugin's internal endpoints refuse anything carrying proxy headers.
+- Anyone can reach the URL, but nothing works without a paired device key, and five wrong pairing codes cancel all open codes.
 
 ### Other MCP agents (Claude Code, Cursor…)
 

@@ -27,6 +27,7 @@ def register(ctx):
         ctx,
         port=int(ctx.get_config("port", default=8798)),
         advertise_host=ctx.get_config("advertise_host", default=None) or None,
+        public_url=ctx.get_config("public_url", default=None) or None,
         offline_message=ctx.get_config("offline_message", default="Browser not available"),
         agent_name=ctx.get_config("agent_name", default=None) or ("Hermes" if profile in ("default", "custom") else profile.title()),
     )

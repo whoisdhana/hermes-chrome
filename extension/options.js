@@ -7,13 +7,14 @@ async function renderPairing() {
   if (Date.now() < pinnedUntil) return;
   const s = await chrome.storage.local.get({ deviceKey: '', host: '', port: 8798, agentName: 'Hermes', pairError: '', deviceName: '' });
   const as = s.deviceName ? ` as "${s.deviceName}"` : '';
+  const where = s.port ? `${s.host}:${s.port}` : s.host; // tunnel pairings store the URL's host only
   const { connected } = await chrome.runtime.sendMessage({ popup: 'status' }).catch(() => ({ connected: false }));
   const st = el('pairStatus');
   st.className = '';
   if (s.pairError) { st.textContent = s.pairError; st.className = 'bad'; }
   else if (!s.deviceKey) st.textContent = 'Not paired yet.';
-  else if (connected) { st.textContent = `Paired with ${s.agentName}${as} (${s.host}:${s.port}). Connected.`; st.className = 'ok'; }
-  else st.textContent = `Paired with ${s.agentName}${as} (${s.host}:${s.port}). Waiting for Hermes…`;
+  else if (connected) { st.textContent = `Paired with ${s.agentName}${as} (${where}). Connected.`; st.className = 'ok'; }
+  else st.textContent = `Paired with ${s.agentName}${as} (${where}). Waiting for Hermes…`;
   el('unpair').hidden = !s.deviceKey;
 }
 

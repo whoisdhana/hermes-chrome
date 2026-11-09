@@ -59,16 +59,39 @@ def _hash(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+def ext_url(public_url: str) -> str:
+    """https://chrome.example.com -> wss://chrome.example.com/ext (the address put into pairing codes)."""
+    url = public_url.strip().rstrip("/")
+    if url.startswith("https://"):
+        url = "wss://" + url[len("https://"):]
+    elif url.startswith("http://"):
+        url = "ws://" + url[len("http://"):]
+    elif not url.startswith(("ws://", "wss://")):
+        url = "wss://" + url
+    return url if url.endswith("/ext") else url + "/ext"
+
+
+# Set by tunnels and reverse proxies. Requests carrying them came from outside this machine even
+# though the socket looks local, so only the extension endpoint (/ext) answers them.
+PROXY_HEADERS = ("Cf-Connecting-Ip", "X-Forwarded-For", "Forwarded", "Tailscale-Funnel-Request", "X-Real-Ip")
+
+
+def via_proxy(request) -> bool:
+    return any(h in request.headers for h in PROXY_HEADERS)
+
+
 def normalize_code(raw: str) -> str:
     code = (raw or "").split("@", 1)[0].upper().replace(" ", "").replace("-", "")
     return code[2:] if code.startswith("HC") else code
 
 
 class Hub:
-    def __init__(self, ctx, *, port: int, advertise_host: str | None, offline_message: str, agent_name: str):
+    def __init__(self, ctx, *, port: int, advertise_host: str | None, offline_message: str, agent_name: str,
+                 public_url: str | None = None):
         self.ctx = ctx
         self.port = port
         self.advertise_override = advertise_host
+        self.public_url = ext_url(public_url) if public_url else None  # set: reached through a tunnel, loopback only
         self.offline_message = offline_message
         self.agent_name = agent_name
         self.profile = ctx.profile_name
@@ -120,6 +143,9 @@ class Hub:
             raise
         self.owner = True
         self._secret()  # make sure clients can find it
+        if self.public_url:  # the tunnel connects on loopback; open no LAN/Tailscale listener
+            log.info("hermes-chrome: listening on 127.0.0.1:%s for %s (profile %s)", self.port, self.public_url, self.profile)
+            return
         self.advertise = detect_host(self.advertise_override)
         if self.advertise != "127.0.0.1":
             try:
@@ -150,7 +176,7 @@ class Hub:
         code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))
         self.codes[code] = now + CODE_TTL
         self.pair_failures = 0
-        return f"HC-{code[:4]}-{code[4:]}@{self.advertise}:{self.port}"
+        return f"HC-{code[:4]}-{code[4:]}@{self.address}"
 
     def _redeem(self, raw: str, device_name: str) -> dict | None:
         code = normalize_code(raw)
@@ -193,7 +219,13 @@ class Hub:
         return gone
 
     # ------------------------------------------------------------------ HTTP handlers (owner)
+    @property
+    def address(self) -> str:
+        return self.public_url or f"{self.advertise}:{self.port}"
+
     async def _health(self, request):
+        if via_proxy(request):
+            return web.Response(status=403)
         return web.json_response({"ok": True, "profile": self.profile, "extension": self.connected})
 
     async def _ext(self, request):
@@ -304,7 +336,7 @@ class Hub:
                 await ws.send_json({**reply, "ok": False, "error": str(e)})
 
     async def _rpc_handler(self, request):
-        if request.remote not in ("127.0.0.1", "::1"):
+        if request.remote not in ("127.0.0.1", "::1") or via_proxy(request):
             return web.Response(status=403)
         if not hmac.compare_digest(request.headers.get("X-HC-Secret", ""), self._secret()):
             return web.Response(status=401)
@@ -390,7 +422,7 @@ class Hub:
             browsers = [{"name": self._name(d), "id": d, "chrome": c["info"].get("browser"), "default": d == self.current}
                         for d, c in self.conns.items() if not c["ws"].closed]
             current = self._name(self.current) if self.current in self.conns else None
-            return {"connected": bool(browsers), "device": current, "browsers": browsers, "address": f"{self.advertise}:{self.port}",
+            return {"connected": bool(browsers), "device": current, "browsers": browsers, "address": self.address,
                     "devices": [{"id": d, "name": v["name"], "last_seen": v["last_seen"]} for d, v in self._devices().items()]}
         try:
             return self._rpc({"method": "__status"}, 2)

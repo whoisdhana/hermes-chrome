@@ -3,7 +3,8 @@
 // calls: page reading via the content script, real (trusted) input via chrome.debugger / CDP.
 
 const DEFAULTS = {
-  host: '',
+  url: '',  // ws:// or wss:// address of Hermes (from the pairing code)
+  host: '', // shown in Settings
   port: 8798,
   deviceId: '',
   deviceKey: '',
@@ -33,7 +34,7 @@ async function connect() {
   if (ws && ws.readyState <= 1) return;
   const s = await settings();
   if (!s.enabled || !s.deviceKey) { setBadge('off'); return; }
-  const sock = new WebSocket(`ws://${s.host}:${s.port}/ext`); // credentials go in the hello frame, never the URL
+  const sock = new WebSocket(serverUrl(s)); // credentials go in the hello frame, never the URL
   ws = sock;
   sock.onopen = () => {
     backoff = 1000;
@@ -73,30 +74,41 @@ async function connect() {
 const CHROME = navigator.userAgent.match(/Chrome\/[\d.]+/)?.[0];
 const defaultDeviceName = () => `Chrome on ${navigator.userAgentData?.platform || 'computer'}`;
 
-// Pair with a code from "/chrome pair": HC-XXXX-XXXX@host:port (host:port optional → this machine).
+// Pair with a code from "/chrome pair": HC-XXXX-XXXX@host:port (Tailscale/LAN, optional → this machine)
+// or HC-XXXX-XXXX@wss://hermes.example.com/ext (Hermes behind an HTTPS tunnel).
 function parseCode(raw) {
-  const [code, addr] = raw.trim().split('@');
-  if (!/^HC-?[A-Z0-9]{4}-?[A-Z0-9]{4}$/i.test(code.replace(/\s/g, ''))) return null;
+  const at = raw.trim().indexOf('@');
+  const code = (at < 0 ? raw.trim() : raw.trim().slice(0, at)).replace(/\s/g, '');
+  const addr = at < 0 ? '' : raw.trim().slice(at + 1).trim();
+  if (!/^HC-?[A-Z0-9]{4}-?[A-Z0-9]{4}$/i.test(code)) return null;
+  if (/^wss?:\/\//i.test(addr)) {
+    try { const u = new URL(addr); return { code, url: u.href, label: u.host }; } catch { return null; }
+  }
   const m = (addr || '127.0.0.1:8798').match(/^\[?([^\]\s]+?)\]?(?::(\d+))?$/);
-  return m && { code: code.replace(/\s/g, ''), host: m[1], port: Number(m[2] || 8798) };
+  if (!m) return null;
+  const host = m[1].includes(':') ? `[${m[1]}]` : m[1], port = Number(m[2] || 8798);
+  return { code, url: `ws://${host}:${port}/ext`, label: `${m[1]}:${port}` };
 }
+
+// Pairings made before 0.5 stored host/port only.
+const serverUrl = (s) => s.url || `ws://${s.host}:${s.port}/ext`;
 
 async function pair(raw) {
   const p = parseCode(raw);
   if (!p) return Promise.resolve({ ok: false, error: 'That does not look like a pairing code. It starts with HC-.' });
   const deviceName = (await settings()).deviceName || defaultDeviceName();
   return new Promise((resolve) => {
-    const sock = new WebSocket(`ws://${p.host}:${p.port}/ext`);
+    const sock = new WebSocket(p.url);
     const done = (r) => { clearTimeout(timer); try { sock.close(); } catch {} resolve(r); };
-    const timer = setTimeout(() => done({ ok: false, error: `No answer from ${p.host}:${p.port}. Is Hermes running, and can this computer reach it (Tailscale/LAN)?` }), 8000);
+    const timer = setTimeout(() => done({ ok: false, error: `No answer from ${p.label}. Is Hermes running, and can this computer reach it (Tailscale, LAN or tunnel URL)?` }), 8000);
     sock.onopen = () => sock.send(JSON.stringify({ type: 'pair', code: p.code, deviceName }));
-    sock.onerror = () => done({ ok: false, error: `Could not reach ${p.host}:${p.port}. Is Hermes running, and can this computer reach it (Tailscale/LAN)?` });
+    sock.onerror = () => done({ ok: false, error: `Could not reach ${p.label}. Is Hermes running, and can this computer reach it (Tailscale, LAN or tunnel URL)?` });
     sock.onmessage = async (e) => {
       const m = JSON.parse(e.data);
       if (m.type !== 'paired') return done({ ok: false, error: m.reason || 'Pairing failed.' });
       ws?.close();
       ws = null;
-      await chrome.storage.local.set({ host: p.host, port: p.port, deviceId: m.deviceId, deviceKey: m.deviceKey,
+      await chrome.storage.local.set({ url: p.url, host: p.label, port: '', deviceId: m.deviceId, deviceKey: m.deviceKey,
         agentName: m.agentName || 'Hermes', enabled: true, pairError: '' });
       done({ ok: true, agentName: m.agentName });
     };
@@ -160,7 +172,7 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg?.popup === 'pair') { pair(msg.code).then(sendResponse); return true; }
   if (msg?.popup === 'unpair') {
     ws?.close();
-    chrome.storage.local.set({ deviceId: '', deviceKey: '', host: '', pairError: '' }).then(() => { setBadge('off'); sendResponse({ ok: true }); });
+    chrome.storage.local.set({ deviceId: '', deviceKey: '', url: '', host: '', pairError: '' }).then(() => { setBadge('off'); sendResponse({ ok: true }); });
     return true;
   }
 });

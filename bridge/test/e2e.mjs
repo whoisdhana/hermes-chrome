@@ -131,6 +131,20 @@ try {
     const reply = await new Promise((r) => sock.on('message', (m) => r(JSON.parse(m))));
     assert.equal(reply.type, 'pair_failed');
   });
+  await step('a tunnel URL code (HC-…@wss://host/ext) pairs and connects', async () => {
+    const urlCode = (await newCode()).replace(/@.*$/, `@ws://127.0.0.1:${PORT}/ext`); // same form as wss://, minus TLS
+    assert.match(await pairWith(urlCode), /Paired with Delulu|Connected|Waiting/);
+    for (let i = 0; i < 40 && !(await health()).extension; i++) await sleep(250);
+    assert.equal((await health()).extension, true);
+    assert.equal(await sw.evaluate(() => chrome.storage.local.get('url').then((s) => s.url)), `ws://127.0.0.1:${PORT}/ext`);
+  });
+  await step('a browser paired before 0.5 (host/port only) still reconnects', async () => {
+    await sw.evaluate((port) => chrome.storage.local.set({ url: '', host: '127.0.0.1', port }), PORT);
+    await sw.evaluate(() => ws.close());
+    for (let i = 0; i < 40 && (await health()).extension; i++) await sleep(100);
+    for (let i = 0; i < 60 && !(await health()).extension; i++) await sleep(250);
+    assert.equal((await health()).extension, true);
+  });
   await options.close();
 
   mcp = new Client({ name: 'e2e', version: '0' });
