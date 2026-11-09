@@ -389,6 +389,7 @@ class UpdateNoticeTest(unittest.TestCase):
         time.sleep(5.1)  # past the hint's status cache
         first = ctx.hooks["pre_llm_call"](session_id="s")
         self.assertIn("older than this plugin", first)
+        self.assertIn('browser "Old Chrome"', first, "names the browser it means")
         self.assertIn(hub_mod.EXTENSION_DOWNLOAD, first)
         self.assertNotIn("older than this plugin", ctx.hooks["pre_llm_call"](session_id="s"), "said once, not every turn")
 

@@ -126,9 +126,13 @@ def register(ctx):
             stale = [b for b in st.get("browsers") or [] if version_tuple(b.get("extension")) and PLUGIN_VERSION
                      and version_tuple(b["extension"]) < version_tuple(PLUGIN_VERSION) and (b["id"], b["extension"]) not in told_update]
             told_update.update((b["id"], b["extension"]) for b in stale)
-            update = (f" Tell the user once, briefly: their Hermes Chrome extension ({stale[0]['extension']}) is older than this "
-                      f"plugin ({PLUGIN_VERSION}); download {EXTENSION_DOWNLOAD}, unzip it over the old extension folder and press "
-                      "Reload in the extension's side panel (or in chrome://extensions).") if stale else ""
+            def how(b):  # 0.8.0+ can update itself from the side panel; older copies need the manual way
+                if version_tuple(b["extension"]) >= (0, 8, 0):
+                    return "press Update now in its Hermes Chrome side panel (or, if that copy is loaded from a git checkout, git pull and press reload in the extensions page)"
+                return (f"press reload on Hermes Chrome in that browser's extensions page (enough if it loads from a git checkout); otherwise download "
+                        f"{EXTENSION_DOWNLOAD}, unzip it over the old extension folder and reload")
+            update = "".join(f" Tell the user once, briefly: the Hermes Chrome extension in their browser \"{b['name']}\" is {b['extension']}, "
+                             f"older than this plugin ({PLUGIN_VERSION}); to update it, {how(b)}." for b in stale[:3])
             return (f"[hermes-chrome] The user's own Chrome{device} (your tab group: {hub.agent_name}). For anything in a "
                     "web browser use the chrome_* tools (load them with tool_search query \"chrome\"), not the built-in browser "
                     "tools. For multi-step tasks: chrome_plan first, a short `why` on every action, chrome_report at the end. "
