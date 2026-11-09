@@ -16,6 +16,7 @@ provides_tools:
   - chrome_type
   - chrome_key
   - chrome_scroll
+  - chrome_batch
   - chrome_wait
   - chrome_handoff
   - chrome_eval

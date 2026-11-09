@@ -870,6 +870,38 @@ const METHODS = {
     return ok(`${note} Now at ${t.url}. Call read_page to continue.`);
   },
 
+  // Several steps in one round trip. Each step runs through the same checks as a single call (a why on every
+  // change, new-site prompt, risky/watched approval, pause and Stop). Stops at the first error, and when a step
+  // moves the page somewhere else before steps that rely on element refs from the old page.
+  async batch({ tabId, actions = [] }) {
+    if (!Array.isArray(actions) || !actions.length) throw new Error('batch needs a non-empty actions list');
+    if (actions.length > BATCH_MAX) throw new Error(`batch takes at most ${BATCH_MAX} actions; split the work`);
+    const results = [];
+    for (let i = 0; i < actions.length; i++) {
+      const { action, ...params } = actions[i] || {};
+      const label = `${i + 1}. ${action}`;
+      if (Date.now() < haltUntil) { results.push(`${label}: not run, the user pressed Stop`); break; }
+      await waitWhilePaused();
+      const tab = await resolveTab(params.tabId ?? tabId);
+      const before = tab.url;
+      try {
+        const r = await METHODS[action]({ ...params, tabId: tab.id });
+        results.push(`${label}: ${r?.text ?? 'done'}`);
+      } catch (e) {
+        results.push(`${label}: FAILED: ${e?.message || e}`);
+        if (i + 1 < actions.length) results.push(`Stopped; steps ${i + 2} to ${actions.length} were not run.`);
+        break;
+      }
+      const now = (await chrome.tabs.get(tab.id).catch(() => null))?.url;
+      const rest = actions.slice(i + 1);
+      if (now && now !== before && rest.some((a) => a?.ref)) {
+        results.push(`The page changed to ${now}, so steps ${i + 2} to ${actions.length} (which use element refs from the old page) were not run. Read the page again.`);
+        break;
+      }
+    }
+    return ok(results.join('\n'));
+  },
+
   async eval_js({ tabId, expression }) {
     const s = await settings();
     if (!s.allowEval) throw new Error('eval_js is disabled. The user can enable it in the Hermes Chrome options.');
@@ -1176,8 +1208,18 @@ let idleTimer = null;
 // Every action that changes a page carries a short reason: it is the caption next to the cursor, the label on an
 // approval prompt and the Activity entry, so the user can always see why the agent did something.
 const NEEDS_WHY = new Set(['click', 'type', 'press_key']);
+const BATCH_ACTIONS = new Set(['click', 'type', 'press_key', 'scroll', 'wait', 'navigate', 'read_page', 'find', 'get_text']);
+const BATCH_MAX = 20;
 const VAGUE_WHY = /^(click(ing)?|typ(e|ing)|press(ing)?( a| the)?( key)?|action|next( step)?|continue|doing it|ok|done|step|n\/a|none)\.?$/i;
 function missingWhy(method, params) {
+  if (method === 'batch') { // check every step before running any of them
+    for (const [i, a] of (Array.isArray(params?.actions) ? params.actions : []).entries()) {
+      if (!BATCH_ACTIONS.has(a?.action)) return `batch step ${i + 1}: "${a?.action}" cannot be batched. Allowed: ${[...BATCH_ACTIONS].join(', ')}.`;
+      const err = missingWhy(a.action, a);
+      if (err) return `batch step ${i + 1}: ${err}`;
+    }
+    return null;
+  }
   if (!NEEDS_WHY.has(method)) return null;
   const why = String(params?.why || '').trim();
   if (why.length >= 4 && !VAGUE_WHY.test(why)) return null;

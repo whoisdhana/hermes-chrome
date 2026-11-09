@@ -287,6 +287,8 @@ export const TOOLS = [
   ['type', 'Type text, optionally into an element by ref (it is clicked first). clear=true empties the field first; submit=true presses Enter after.', { tabId, ref, text: z.string(), clear: z.boolean().optional(), submit: z.boolean().optional(), why: whyRequired }],
   ['press_key', 'Press a key or chord, e.g. "Enter", "Tab", "Escape", "ArrowDown", "Control+a", "Meta+a".', { tabId, key: z.string(), why: whyRequired }],
   ['scroll', 'Scroll the page (or the element by ref into view).', { tabId, ref, direction: z.enum(['up', 'down', 'left', 'right']).optional(), amount: z.number().optional(), why }],
+  ['batch', 'Run up to 20 steps in one call (e.g. fill several fields and submit). Each action is {action, ...its usual arguments}; action is one of click, type, press_key, scroll, wait, navigate, read_page, find, get_text. click/type/press_key need a why; approvals still apply. Stops at the first error or when the page changes before ref-based steps.',
+    { tabId, actions: z.array(z.object({ action: z.enum(['click', 'type', 'press_key', 'scroll', 'wait', 'navigate', 'read_page', 'find', 'get_text']) }).passthrough()).min(1).max(20) }],
   ['wait', 'Wait for a number of milliseconds (max 15000), e.g. after an action that loads content.', { tabId, ms: z.number().int() }],
   ['handoff', 'Ask the human to do something in the page (CAPTCHA, login, 2FA, payment confirmation). Shows a banner in the tab and waits until they click Done or the timeout passes. Never try to solve CAPTCHAs yourself.', { tabId, message: z.string(), timeoutSec: z.number().int().optional() }],
   ['eval_js', 'Run a JavaScript expression in the page and return the result. Disabled unless the user enabled it in the extension options.', { tabId, expression: z.string() }],
@@ -314,7 +316,8 @@ function buildMcpServer() {
         const tabs = await ext.call('tabs_list', {}).catch(() => null);
         return { content: [{ type: 'text', text: JSON.stringify({ connected: true, browser: ext.info?.browser, extension: ext.info?.version, tabs: tabs?.tabs ?? [] }) }] };
       }
-      const timeout = name === 'handoff' ? ((args.timeoutSec ?? 600) + 15) * 1000 : CALL_TIMEOUT_MS;
+      const timeout = name === 'handoff' ? ((args.timeoutSec ?? 600) + 15) * 1000
+        : name === 'batch' ? Math.min(900, 120 + 30 * args.actions.length) * 1000 : CALL_TIMEOUT_MS;
       try {
         return { content: toContent(await ext.call(name, args, timeout)) };
       } catch (e) {

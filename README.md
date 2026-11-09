@@ -70,6 +70,7 @@ Chat uses the Hermes API server of the same profile (`API_SERVER_ENABLED=true` a
 | `chrome_read_page`, `chrome_find`, `chrome_text` | Page outline with element refs (`e12`), search, visible text |
 | `chrome_screenshot` | The visible tab, shown to the model as an image |
 | `chrome_click`, `chrome_type`, `chrome_key`, `chrome_scroll` | Real (trusted) input through the Chrome debugger API, with cursor animation |
+| `chrome_batch` | Up to 20 steps in one call (fill a form and submit), each with the same checks as a single call; stops at the first error or when the page changes |
 | `chrome_wait` | Pause up to 15 s |
 | `chrome_handoff` | Ask you to do a step (CAPTCHA, login, payment) and wait for Done |
 | `chrome_eval` | Run JavaScript in the page; off unless you enable it |

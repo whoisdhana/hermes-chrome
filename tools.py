@@ -58,6 +58,16 @@ TOOLS = [
     ("chrome_scroll", "scroll", _schema("chrome_scroll", "Scroll the page, or scroll an element (ref) into view.",
         {"tabId": TAB, "ref": REF, "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
          "amount": {"type": "number"}, "why": WHY})),
+    ("chrome_batch", "batch", _schema("chrome_batch",
+        "Run up to 20 steps in one call, e.g. fill several fields and submit a form: much faster than one call per step. "
+        "Each action is {action, ...same arguments as its own tool}; action is one of click, type, press_key, scroll, wait, "
+        "navigate, read_page, find, get_text. click/type/press_key still need a why, and approvals still apply. Stops at the "
+        "first error, or when the page changes before steps that use refs from the old page. Use it once you know the refs.",
+        {"tabId": TAB, "actions": {"type": "array", "items": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["click", "type", "press_key", "scroll", "wait", "navigate", "read_page", "find", "get_text"]},
+            "ref": REF, "text": {"type": "string"}, "key": {"type": "string"}, "url": {"type": "string"}, "query": {"type": "string"},
+            "clear": {"type": "boolean"}, "submit": {"type": "boolean"}, "direction": {"type": "string"}, "amount": {"type": "number"},
+            "ms": {"type": "integer"}, "why": WHY}, "required": ["action"]}}}, ["actions"])),
     ("chrome_wait", "wait", _schema("chrome_wait", "Wait up to 15000 ms for the page to settle.",
         {"tabId": TAB, "ms": {"type": "integer"}}, ["ms"])),
     ("chrome_handoff", "handoff", _schema("chrome_handoff",
@@ -100,7 +110,8 @@ def make_handler(hub, tool: str, method: str | None):
                 return _replay(hub, args)
             if tool == "chrome_handoff":  # also ping the user where they talk to the agent
                 telegram_note.notify(f"✋ {hub.agent_name} needs you in Chrome: {args.get('message', '')}")
-            timeout = (int(args.get("timeoutSec") or 600) + 15) if tool == "chrome_handoff" else 60
+            timeout = ((int(args.get("timeoutSec") or 600) + 15) if tool == "chrome_handoff"
+                       else min(900, 120 + 30 * len(args.get("actions") or [])) if tool == "chrome_batch" else 60)
             result = hub.call(method, args, timeout)
         except BrowserUnavailable as e:
             return str(e)

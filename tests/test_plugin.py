@@ -157,7 +157,7 @@ class PluginTest(unittest.TestCase):
         return cls.ctx.tools["chrome_open"].__closure__[0].cell_contents  # make_handler closes over hub first
 
     def test_1_registers_everything(self):
-        self.assertEqual(len(self.ctx.tools), 19)
+        self.assertEqual(len(self.ctx.tools), 20)
         self.assertIn("pre_llm_call", self.ctx.hooks)
         self.assertIn("chrome", self.ctx.commands)
         self.assertTrue((Path(self.ctx.skills["browser"]) / "SKILL.md").exists())

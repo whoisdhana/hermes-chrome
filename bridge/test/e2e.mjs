@@ -178,7 +178,7 @@ try {
     const h = await fetch(`http://127.0.0.1:${PORT}/health`).then((r) => r.json());
     assert.equal(h.extension, true, 'real extension still connected');
   });
-  await step('tools/list has 19 tools', async () => assert.equal((await mcp.listTools()).tools.length, 19));
+  await step('tools/list has 20 tools', async () => assert.equal((await mcp.listTools()).tools.length, 20));
   await step('browser_status connected', async () => assert.match((await call('browser_status')).text, /"connected":true/));
 
   let tabId, outline;
@@ -352,6 +352,27 @@ try {
     await sw.evaluate(() => chrome.storage.local.set({ keepTabs: false }));
     await call('report', { summary: 'Tidy' });
     assert.equal(await count(), before);
+  });
+  await step('batch: several steps in one call, checks still apply', async () => {
+    await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/` });
+    const o = (await call('read_page', { tabId })).text;
+    const name = refOf(o, /textbox "Full name"/), go = refOf(o, /button "Continue"/), next = refOf(o, /link "Next page"/);
+    await assert.rejects(call('batch', { tabId, actions: [
+      { action: 'type', ref: name, text: 'Nope', why: 'Entering your name' }, { action: 'click', ref: go }] }), /step 2: click needs a short "why"/);
+    assert.doesNotMatch((await call('get_text', { tabId })).text, /Nope/, 'nothing ran when a step lacked a why');
+    await assert.rejects(call('batch', { tabId, actions: [{ action: 'eval_js', expression: '1' }] })); // refused by the schema (and by the extension)
+    const r = (await call('batch', { tabId, actions: [
+      { action: 'type', ref: name, text: 'Grace Hopper', clear: true, why: 'Entering your name' },
+      { action: 'click', ref: go, why: 'Moving to the next page' },
+      { action: 'get_text' }] })).text;
+    assert.match(r, /^1\. type: typed 12 chars/m);
+    assert.match(r, /^2\. click: clicked/m);
+    assert.match(r, /Hello Grace Hopper/);
+    const moved = (await call('batch', { tabId, actions: [
+      { action: 'click', ref: next, why: 'Opening the next page' },
+      { action: 'click', ref: go, why: 'Moving on' }] })).text;
+    assert.match(moved, /page changed to .*\/two.*steps 2 to 2/s);
+    await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/` });
   });
   await step('teach: record a task, save it, replay it with a variable', async () => {
     const p = testPage();
