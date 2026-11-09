@@ -24,7 +24,7 @@ The extension connects out to Hermes, so your laptop needs no open ports. When t
 ## Watching it work
 
 - **Plan strip**: for multi-step tasks a slim bar at the top of the page shows the plan, the current step and progress (`Delulu · Exporting the CSV · 3/5`), with pause and stop. The tab group title follows along (`⏳ Delulu 3/5`).
-- **Intent captions**: every action carries a short reason that appears next to the cursor ("Opening the date picker").
+- **Intent captions**: every click, keystroke and key press must carry a short reason ("Opening the date picker"). It appears next to the cursor, on approval prompts and in Activity; actions without one are refused.
 - **Takeover**: touch the mouse or keyboard in the agent's tab and it pauses on its own ("You took over… Press ▶ when it can continue"). Pause and resume also from the strip, the side panel, or **⌥⇧.** (Alt+Shift+.).
 - **Tab marker**: the agent's tab is marked next to the address bar (a badge on the toolbar icon: ● working, II paused, ! needs you) and in the tab strip (a coloured dot on the tab's icon).
 - **Needs you**: CAPTCHAs, logins, payments and risky clicks raise a Mac notification and, when you are talking to the agent on Telegram, a message there.
@@ -43,6 +43,7 @@ Replay drives the same cursor and plan strip. Each element is found again by id,
 Click the toolbar icon to open it. Right-click the icon for **Settings** and **Stop agent**.
 
 - Replies stream in. While the agent works, one live status line shows the current step ("Delulu · Clicked Continue…"); turn on **Show each step in chat** in Settings to list every action instead. All steps are always in the Activity tab.
+- **@-mention a tab**: type `@` and pick any of your open tabs to send its text along as read-only context ("compare @[Flipkart] with @[Amazon]"). The tab stays where it is, and the agent treats its content as data, not instructions.
 - **Use this tab** hands the page you are on to the agent, so "fill this form" just works.
 - **Model picker** in the header: any model from the providers you are signed in to in Hermes.
 - **Attachments**: 📎 files, 📸 a screenshot of the tab, or paste and drop images. Images go to the model directly; other files are saved on the Hermes machine and the agent reads them with its file tools.

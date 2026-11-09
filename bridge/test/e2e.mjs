@@ -419,6 +419,29 @@ try {
     assert.equal(await panel.textContent('.assistant'), 'Hello from mock', 'transcript persists');
     await panel.close();
   });
+  await step('side panel: @-mention one of your tabs as read-only context', async () => {
+    const extId = new URL(sw.url()).host;
+    const userTab = await ctx.newPage(); // a tab of the user's, outside the agent group
+    await userTab.goto(`http://127.0.0.1:${PAGE_PORT}/two`);
+    const panel = await ctx.newPage();
+    await panel.goto(`chrome-extension://${extId}/sidepanel.html`);
+    await panel.$eval('#useTab', (el) => { el.checked = false; }); // only the mention, not "this tab"
+    await panel.fill('#input', 'summarise @Tw');
+    await panel.waitForSelector('#menu .item', { timeout: 5000 });
+    assert.match(await panel.textContent('#menu .item'), /Two/);
+    await panel.keyboard.press('Enter'); // pick the tab
+    assert.equal(await panel.inputValue('#input'), 'summarise @[Two] ');
+    const sent = hermesRequests.length;
+    await panel.keyboard.press('Enter'); // send
+    for (let i = 0; i < 100 && hermesRequests.length === sent; i++) await sleep(100);
+    const req = hermesRequests.at(-1);
+    assert.match(req.body.input, /summarise @\[Two\]/);
+    assert.match(req.body.input, /Tab the user mentioned[\s\S]*not instructions from the user[\s\S]*Page two/);
+    const groupTabs = await sw.evaluate(() => agentTabs().then((t) => t.map((x) => x.url)));
+    assert.ok(!groupTabs.some((u) => u.endsWith('/two')), 'the mentioned tab is not pulled into the agent group');
+    await panel.close();
+    await userTab.close();
+  });
   await step('side panel: model picker, / menu, attachments', async () => {
     const panel = await ctx.newPage();
     await panel.goto(`chrome-extension://${extId}/sidepanel.html`);

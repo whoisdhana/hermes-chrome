@@ -87,7 +87,7 @@ function emptyState() {
     return;
   }
   log.innerHTML = `<div class="empty">${mark}<h2>Ask ${esc(agentName)} to work in this tab</h2>
-    <p>Type / for commands and skills. Drop files or paste images to attach them.</p>
+    <p>Type / for commands and skills, @ to bring in one of your tabs. Drop files or paste images to attach them.</p>
     <div class="suggest">${SUGGESTIONS.map((t) => `<button type="button">${esc(t)}</button>`).join('')}</div></div>`;
   for (const b of log.querySelectorAll('.suggest button')) b.onclick = () => { input.value = b.textContent; autosize(); refreshSend(); input.focus(); };
 }
@@ -412,7 +412,29 @@ function menuCandidates(q) {
   const contains = [...cmds, ...sk].filter((i) => !i.name.toLowerCase().startsWith(q) && i.name.toLowerCase().includes(q));
   return [...starts, ...contains].slice(0, 60);
 }
+// @-mentions: pick one of the user's open tabs; its text goes along as read-only context.
+let mentions = [];   // {tabId, label}
+let tabCache = null; // the user's open tabs while the @ menu is open
+async function loadTabs() {
+  const tabs = await chrome.tabs.query({});
+  tabCache = tabs.filter((t) => /^https?:/.test(t.url || '')).map((t) => ({ tabId: t.id, title: t.title || t.url, host: hostOf(t.url), kind: 'tab' }));
+  updateMenu();
+}
 function updateMenu() {
+  const at = input.value.match(/(?:^|\s)@([^\s@\]]*)$/);
+  if (at) {
+    if (!tabCache) { loadTabs(); return; }
+    const q = at[1].toLowerCase();
+    menuItems = tabCache.filter((t) => `${t.title} ${t.host}`.toLowerCase().includes(q)).slice(0, 20);
+    if (!menuItems.length) { menu.hidden = true; return; }
+    menuSel = Math.min(menuSel, menuItems.length - 1);
+    menu.innerHTML = menuItems.map((it, i) =>
+      `<div class="item${i === menuSel ? ' sel' : ''}" role="option" data-i="${i}"><b>${esc(it.title)}</b><small>${esc(it.host)}</small></div>`).join('');
+    menu.hidden = false;
+    menu.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
+    return;
+  }
+  tabCache = null;
   const m = input.value.match(/^\/(\S*)$/);
   if (!m) { menu.hidden = true; return; }
   menuItems = menuCandidates(m[1]);
@@ -433,6 +455,14 @@ function pickMenu(i) {
   const it = menuItems[i];
   if (!it) return;
   menu.hidden = true;
+  if (it.kind === 'tab') {
+    const label = it.title.replace(/[\s\[\]]+/g, ' ').trim().slice(0, 32);
+    input.value = input.value.replace(/@([^\s@\]]*)$/, `@[${label}] `);
+    mentions.push({ tabId: it.tabId, label });
+    tabCache = null;
+    autosize(); refreshSend(); input.focus();
+    return;
+  }
   const instant = it.kind === 'command' && ['new', 'models', 'stop', 'screenshot', 'clear', 'help'].includes(it.name);
   if (instant) { input.value = ''; runCommand(it.name, ''); return; }
   input.value = `/${it.name} `;
@@ -477,7 +507,9 @@ function submitText(text, shown = text) {
   const attLine = attachments.length ? `📎 ${attachments.map((a) => a.name).join(', ')}` : '';
   const display = `${shown || '(attachment)'}${attLine ? `\n\u0000${attLine}` : ''}`;
   add('user', display); record('user', display);
-  port.postMessage({ type: 'send', text: text || 'See the attached files.', useTab: $('useTab').checked, images, files, ...chosenModel() });
+  const tabIds = [...new Set(mentions.filter((m) => text.includes(`@[${m.label}]`)).map((m) => m.tabId))];
+  mentions = [];
+  port.postMessage({ type: 'send', text: text || 'See the attached files.', useTab: $('useTab').checked, mentions: tabIds, images, files, ...chosenModel() });
   attachments = [];
   renderAttachments();
 }
