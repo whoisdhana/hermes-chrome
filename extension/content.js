@@ -455,6 +455,15 @@
       return `Page: ${document.title} — ${location.href}\n\n` + (t.length > maxChars ? t.slice(0, maxChars) + `\n…(truncated, ${t.length} chars total)` : t);
     },
 
+    // What is really under (x, y) right now: the named element (or something inside it), and if it is a frame, where it points.
+    hitTest({ ref, x, y }) {
+      const at = document.elementFromPoint(x, y);
+      if (!at) return { ok: false, frame: '' };
+      const el = ref ? elFor(ref) : null;
+      const ok = !el || el === at || el.contains(at) || at.contains(el);
+      return { ok, frame: at.tagName === 'IFRAME' ? (at.src || '') : '' };
+    },
+
     locate({ ref }) {
       const el = elFor(ref);
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });

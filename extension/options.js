@@ -32,9 +32,24 @@ async function renderPairing() {
   el('unpair').hidden = !s.deviceKey;
 }
 
+// Whoever runs the server in a pairing code gets control of this browser, so say who that is before pairing.
+function pairWarning(code) {
+  const addr = code.split('@')[1]?.trim();
+  if (!addr) return null; // no address: this computer
+  let host = addr, secure = false;
+  try { if (/^wss?:\/\//i.test(addr)) { const u = new URL(addr); host = u.hostname; secure = u.protocol === 'wss:'; } else host = addr.replace(/^\[|\]?(:\d+)?$/g, ''); } catch {}
+  if (/^(127\.|localhost$|::1$)/.test(host)) return null;
+  const privateNet = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(host) || host.endsWith('.ts.net');
+  return `${host} will be able to control this browser: open your tabs, read pages and act as you on your signed-in sites.`
+    + (!secure && !privateNet ? '\n\nWarning: this is not an encrypted (wss://) or private (Tailscale/LAN) address.' : '')
+    + '\n\nOnly continue if this is your own Hermes. Pair?';
+}
+
 el('pair').onclick = async () => {
   const code = el('code').value.trim();
   if (!code) return;
+  const warning = pairWarning(code);
+  if (warning && !window.confirm(warning)) return;
   el('pair').disabled = true;
   pinnedUntil = 0;
   el('pairStatus').className = '';

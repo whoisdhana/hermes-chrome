@@ -25,8 +25,10 @@ const PAGE = `<!doctype html><title>HC test</title>
 <label for="n">Full name</label> <input id="n" placeholder="Your name"><br><br>
 <button id="go" onclick="document.getElementById('out').textContent='Hello '+document.getElementById('n').value">Continue</button>
 <button onclick="document.getElementById('out').textContent='DELETED'">Delete account</button>
-<p id="out"></p><div style="height:2000px"></div><a href="/two">Next page</a></body>`;
+<p id="out"></p><div style="height:2000px"></div><a href="/two">Next page</a>
+<div style="position:relative;display:inline-block"><button>Covered button</button><div style="position:absolute;inset:0"></div></div></body>`;
 const pageServer = http.createServer((req, res) => {
+  if (req.url === '/redir') { res.writeHead(302, { location: `http://localhost:${PAGE_PORT}/two` }); return res.end(); }
   res.writeHead(200, { 'content-type': 'text/html' });
   res.end(req.url === '/two' ? '<title>Two</title><h1>Page two</h1>' : PAGE);
 }).listen(PAGE_PORT);
@@ -392,6 +394,21 @@ try {
     assert.match(moved, /page changed to .*\/two.*steps 2 to 2/s);
     await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/` });
   });
+  await step('blocked list: loose entries match, redirects onto a blocked site are left', async () => {
+    await sw.evaluate(() => chrome.storage.local.set({ blockedHosts: 'https://Example.COM/\n*.Localhost.' }));
+    await assert.rejects(call('tab_open', { url: 'https://www.example.com./x', newTab: true }), /blocked/);
+    const r = JSON.parse((await call('tab_open', { url: `http://127.0.0.1:${PAGE_PORT}/redir`, newTab: true })).text);
+    let url = '';
+    for (let i = 0; i < 40 && url !== 'about:blank'; i++) { await sleep(100); url = await sw.evaluate((id) => chrome.tabs.get(id).then((t) => t.url), r.tabId); }
+    assert.equal(url, 'about:blank', 'the redirect landed on a blocked host and the tab left it');
+    await sw.evaluate(() => chrome.storage.local.set({ blockedHosts: '' }));
+    await call('report', { summary: 'Checked the block list' });
+  });
+  await step('click: refused when something else covers the element', async () => {
+    await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/` });
+    const o = (await call('read_page', { tabId })).text;
+    await assert.rejects(call('click', { tabId, ref: refOf(o, /Covered button/), why: 'Pressing the button' }), /Something else is now on top/);
+  });
   await step('action check: a "no" is shown with the reason; the user decides', async () => {
     const p = testPage();
     await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/` });
@@ -410,6 +427,13 @@ try {
     await sleep(1500);
     await p.keyboard.press('Enter'); // Deny
     assert.match(await pending, /Blocked/, 'data-carrying navigation to another host is checked');
+    await sw.evaluate(() => { globalThis.__checks = []; requestIntentCheck = async (c) => { __checks.push(c); return { ok: true }; }; });
+    await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/` });
+    const o2 = (await call('read_page', { tabId })).text;
+    await call('type', { tabId, ref: refOf(o2, /textbox "Full name"/), text: 'Ada', clear: true, why: 'Entering your name' });
+    await call('click', { tabId, ref: refOf(o2, /button "Continue"/), why: 'Sending the form' });
+    const checks = await sw.evaluate(() => __checks);
+    assert.ok(checks.some((c) => c.action === 'click' && /after typing "Ada"/.test(c.target)), 'a click right after typing is checked');
     await sw.evaluate(() => { requestIntentCheck = globalThis.__origCheck; });
     await call('report', { summary: 'Checked' });
   });

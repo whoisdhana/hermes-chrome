@@ -51,6 +51,12 @@ def _save_upload(hub, f: dict) -> str | None:
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", f.get("name") or "file")[-80:]
     folder = Path(hub.ctx.state.data_dir) / "uploads"
     folder.mkdir(parents=True, exist_ok=True)
+    for old in folder.iterdir():  # side-panel attachments are for the chat at hand; keep a week, no more
+        try:
+            if old.is_file() and time.time() - old.stat().st_mtime > 7 * 86400:
+                old.unlink()
+        except OSError:
+            pass
     path = folder / f"{time.strftime('%Y%m%d-%H%M%S')}-{name}"
     path.write_bytes(data)
     return str(path)
