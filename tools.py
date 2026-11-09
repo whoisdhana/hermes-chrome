@@ -72,7 +72,8 @@ TOOLS = [
         {"tabId": TAB, "ms": {"type": "integer"}}, ["ms"])),
     ("chrome_handoff", "handoff", _schema("chrome_handoff",
         "Ask the user to do a step themselves in the page (CAPTCHA, login, 2FA, payment confirmation). Shows a banner in their "
-        "browser and waits until they press Done. Never try to solve CAPTCHAs yourself.",
+        "browser and waits until they press Done; for a CAPTCHA it continues by itself once the user has solved it. "
+        "Never try to solve CAPTCHAs yourself.",
         {"tabId": TAB, "message": {"type": "string"}, "timeoutSec": {"type": "integer"}}, ["message"])),
     ("chrome_eval", "eval_js", _schema("chrome_eval",
         "Run a JavaScript expression in the page. Disabled unless the user enabled it in the extension settings.",
@@ -96,6 +97,19 @@ for _name, _method, _schema_ in TOOLS:
     _schema_["parameters"]["properties"]["browser"] = BROWSER
 
 
+def _ping_handoff(hub, args: dict) -> None:
+    """Telegram: the step the user has to do, with a screenshot of the tab, so they can decide without opening the laptop."""
+    text = f"✋ {hub.agent_name} needs you in Chrome: {args.get('message', '')}\nSolve it in the browser; I continue by myself once it is done."
+    try:
+        shot = hub.call("screenshot", {**{k: v for k, v in args.items() if k in ("tabId", "browser")}, "forPing": True}, 20)
+        data = (shot or {}).get("image", {}).get("data") if isinstance(shot, dict) else None
+        if data and telegram_note.send_report(text, [(base64.b64decode(data), "The page now")]):
+            return
+    except Exception:
+        pass
+    telegram_note.notify(text)
+
+
 def make_handler(hub, tool: str, method: str | None):
     def handler(args: dict, **kwargs):
         try:
@@ -108,8 +122,8 @@ def make_handler(hub, tool: str, method: str | None):
                 return json.dumps(st)
             if tool == "chrome_replay":
                 return _replay(hub, args)
-            if tool == "chrome_handoff":  # also ping the user where they talk to the agent
-                telegram_note.notify(f"✋ {hub.agent_name} needs you in Chrome: {args.get('message', '')}")
+            if tool == "chrome_handoff":  # also ping the user where they talk to the agent, with what the page looks like
+                _ping_handoff(hub, args)
             timeout = ((int(args.get("timeoutSec") or 600) + 15) if tool == "chrome_handoff"
                        else min(900, 120 + 30 * len(args.get("actions") or [])) if tool == "chrome_batch" else 60)
             result = hub.call(method, args, timeout)

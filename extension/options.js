@@ -72,8 +72,18 @@ el('pair').onclick = async () => {
 el('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') el('pair').click(); });
 
 // Device name: used when pairing, and sent on every connect so Hermes keeps it up to date.
-const defaultName = `Chrome on ${navigator.userAgentData?.platform || 'computer'}`;
+// Which browser this is (Brave, Edge and friends all say "Chrome" in the user agent), for device names and /chrome devices.
+function browserBrand() {
+  const brands = (navigator.userAgentData?.brands || []).map((b) => b.brand);
+  for (const [match, name] of [['Brave', 'Brave'], ['Edge', 'Edge'], ['Opera', 'Opera'], ['Vivaldi', 'Vivaldi'], ['Arc', 'Arc']]) {
+    if (brands.some((b) => b.includes(match))) return name;
+  }
+  if (navigator.brave) return 'Brave';
+  return brands.includes('Google Chrome') || !brands.includes('Chromium') ? 'Chrome' : 'Chromium';
+}
+const defaultName = `${browserBrand()} on ${navigator.userAgentData?.platform || 'computer'}`;
 chrome.storage.local.get({ deviceName: '' }).then((s) => { el('deviceName').value = s.deviceName || defaultName; });
+chrome.storage.onChanged.addListener((c, area) => { if (area === 'local' && c.deviceName?.newValue) el('deviceName').value = c.deviceName.newValue; }); // renamed from chat
 el('saveName').onclick = async () => {
   const name = el('deviceName').value.trim().slice(0, 60) || defaultName;
   el('deviceName').value = name;

@@ -30,6 +30,11 @@
     .status small { display: block; }
     .actions { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
     .divider { height: 1px; background: #EEEAE6; margin: 4px 0; }
+    details.more { display: grid; gap: 12px; }
+    details.more > summary { cursor: pointer; font-weight: 600; color: #57534E; list-style: none; padding: 4px 0; }
+    details.more > summary::before { content: '▸ '; }
+    details.more[open] > summary::before { content: '▾ '; }
+    details.more[open] { display: grid; gap: 12px; }
     .card { border: 1px solid #E7E5E4; background: #FFF; border-radius: 12px; padding: 16px; display: grid; gap: 10px; }
     .row { display: flex; gap: 8px; }
     .row input { flex: 1; font-family: ui-monospace, Menlo, monospace; letter-spacing: .03em; }
@@ -66,39 +71,36 @@
       </div>
     </section>
 
-    <h2>How it works</h2>
     <section class="card">
-      <label class="check"><input id="humanPace" type="checkbox"> <span>Human pace <small>Real mouse movement, one key at a time, short pauses. Slower, but sites react as they would to you.</small></span></label>
-      <label class="check"><input id="keepTabs" type="checkbox"> <span>Keep extra tabs open after a task <small>The agent works in one tab and opens more only for side-by-side research. Off: it closes those extra tabs when the task ends.</small></span></label>
-      <label class="check"><input id="showSteps" type="checkbox"> <span>Show each step in chat <small>List every browser action in the side-panel chat. Off: one live status line while the agent works (all steps stay in Activity).</small></span></label>
-      <label class="inline">Tab group colour
-        <select id="groupColor">
-          <option>orange</option><option>blue</option><option>purple</option><option>green</option>
-          <option>red</option><option>yellow</option><option>cyan</option><option>pink</option><option>grey</option>
-        </select></label>
+      <label class="check"><input id="humanPace" type="checkbox"> <span>Human pace <small>Real mouse movement, one key at a time, short pauses.</small></span></label>
+      <label class="check"><input id="confirmRisky" type="checkbox"> <span>Ask me before risky clicks <small>Pay, buy, delete, send, publish, post.</small></span></label>
+      <label class="check"><input id="askNewSites" type="checkbox"> <span>Ask before acting on a new site <small>Decline, Allow once or Always allow, the first time it clicks or types on a site.</small></span></label>
     </section>
 
-    <h2>Approvals</h2>
-    <section class="card">
-      <label class="check"><input id="confirmRisky" type="checkbox"> <span>Ask me before risky clicks <small>Pay, buy, delete, send, publish, post and similar.</small></span></label>
-      <label class="check"><input id="askNewSites" type="checkbox"> <span>Ask before acting on a new site <small>The agent can read any page, but its first click or keystroke on a site you have not approved asks: Decline, Allow once (this task) or Always allow.</small></span></label>
-      <label class="check"><input id="checkActions" type="checkbox"> <span>Check risky actions against my request <small>Before a risky click, a form submit or moving to another site, your agent's own model checks it fits what you asked. If not, you see why and decide. Needs the Hermes plugin.</small></span></label>
-    </section>
-
-    <h2>Sites</h2>
-    <section class="card">
-      <label>Blocked <small>The agent never opens or touches these sites (and their subdomains). One per line. Starts with password-manager vaults.</small>
-        <textarea id="blockedHosts" spellcheck="false"></textarea></label>
-      <label>Ask me first <small>Every click, keystroke and form submit here waits for your OK. Starts with webmail, payment apps, banks and brokers.</small>
-        <textarea id="watchHosts" spellcheck="false"></textarea></label>
-      <label>Allowed to act on <small>Added when you press Always allow. Delete a line to take the permission back.</small>
-        <textarea id="allowedHosts" spellcheck="false"></textarea></label>
-    </section>
-
-    <h2>Advanced</h2>
-    <section class="card">
-      <label class="check"><input id="allowEval" type="checkbox"> <span>Allow the agent to run JavaScript in pages <small>Powerful and risky. Leave off unless you need it. Never allowed on "Ask me first" sites.</small></span></label>
-    </section>
+    <details class="more">
+      <summary>More settings</summary>
+      <section class="card">
+        <label class="check"><input id="checkActions" type="checkbox"> <span>Check risky actions against my request <small>Your agent's own model checks risky clicks, submits and moves to other sites fit what you asked. Needs the Hermes plugin.</small></span></label>
+        <label class="check"><input id="keepTabs" type="checkbox"> <span>Keep extra tabs open after a task <small>Off: extra tabs opened for side-by-side research close when the task ends.</small></span></label>
+        <label class="check"><input id="showSteps" type="checkbox"> <span>Show each step in chat <small>Off: one live status line while the agent works.</small></span></label>
+        <label class="inline">Tab group colour
+          <select id="groupColor">
+            <option>orange</option><option>blue</option><option>purple</option><option>green</option>
+            <option>red</option><option>yellow</option><option>cyan</option><option>pink</option><option>grey</option>
+          </select></label>
+      </section>
+      <section class="card">
+        <label>Blocked sites <small>Never opened or touched. One per line. Starts with password-manager vaults.</small>
+          <textarea id="blockedHosts" spellcheck="false"></textarea></label>
+        <label>Ask me first <small>Every click, keystroke and submit waits for your OK. Starts with webmail, payments, banks and brokers.</small>
+          <textarea id="watchHosts" spellcheck="false"></textarea></label>
+        <label>Allowed to act on <small>Added when you press Always allow. Delete a line to take it back.</small>
+          <textarea id="allowedHosts" spellcheck="false"></textarea></label>
+      </section>
+      <section class="card">
+        <label class="check"><input id="allowEval" type="checkbox"> <span>Allow the agent to run JavaScript in pages <small>Powerful and risky. Never on "Ask me first" sites.</small></span></label>
+      </section>
+    </details>
 
     <div class="savebar"><span id="saved"></span><button id="save" type="button">Save changes</button></div>
   </main>

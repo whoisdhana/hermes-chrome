@@ -43,6 +43,7 @@ def version_tuple(v: str | None) -> tuple:
 PLUGIN_VERSION = _plugin_version()
 EXTENSION_DOWNLOAD = "https://github.com/whoisdhana/hermes-chrome/releases/latest/download/hermes-chrome-extension.zip"
 
+AUTO_FORGET_DAYS = 90
 REQUEST_TTL = 2 * 3600  # how long the user's last message counts as "the request" for action checks
 JUDGE_PROMPT = (
     "You check one browser action an AI agent wants to take in the user's real, logged-in browser. "
@@ -177,6 +178,7 @@ class Hub:
             raise
         self.owner = True
         self._secret()  # make sure clients can find it
+        self._prune(AUTO_FORGET_DAYS)  # browsers not seen for months are forgotten (their keys stop working)
         if self.public_url:  # the tunnel connects on loopback; open no LAN/Tailscale listener
             log.info("hermes-chrome: listening on 127.0.0.1:%s for %s (profile %s)", self.port, self.public_url, self.profile)
             return
@@ -208,8 +210,7 @@ class Hub:
         now = time.time()
         self.codes = {c: exp for c, exp in self.codes.items() if exp > now}
         code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))
-        self.codes[code] = now + CODE_TTL
-        self.pair_failures = 0
+        self.codes[code] = now + CODE_TTL  # minting a code does not reset the wrong-guess counter
         return f"HC-{code[:4]}-{code[4:]}@{self.address}"
 
     def _redeem(self, raw: str, device_name: str) -> dict | None:
@@ -232,14 +233,56 @@ class Hub:
         dev = self._devices().get(device_id or "")
         return bool(dev) and hmac.compare_digest(dev["key_sha256"], _hash(key or ""))
 
-    def _touch(self, device_id: str, name: str | None = None) -> None:
-        """Record a connect; the extension's current device name wins, so renames show up here."""
+    def _touch(self, device_id: str, name: str | None = None, browser: str | None = None) -> str | None:
+        """Record a connect. The extension's device name wins, unless the user renamed this browser from chat while it
+        was offline: then that name wins and is returned so the extension can adopt it."""
         devices = self._devices()
-        if device_id in devices:
-            devices[device_id]["last_seen"] = int(time.time())
-            if name and name.strip():
-                devices[device_id]["name"] = name.strip()[:60]
+        dev = devices.get(device_id)
+        if not dev:
+            return None
+        dev["last_seen"] = int(time.time())
+        if browser:
+            dev["browser"] = str(browser)[:40]
+        adopt = dev.pop("pending_name", None)
+        if adopt:
+            dev["name"] = adopt
+        elif name and name.strip():
+            dev["name"] = name.strip()[:60]
+        self._save_devices(devices)
+        return adopt
+
+    def _find(self, who: str) -> list[str]:
+        devices = self._devices()
+        w = (who or "").strip().casefold()
+        return [d for d, v in devices.items() if w in (d.casefold(), v.get("name", "").casefold())]
+
+    def _rename(self, who: str, new: str) -> str | None:
+        """Rename a paired browser from chat. A connected browser adopts the name at once; an offline one on its next connect."""
+        new = re.sub(r"\s+", " ", new or "").strip()[:60]
+        hits = self._find(who)
+        if not new or len(hits) != 1:
+            return None
+        devices = self._devices()
+        did = hits[0]
+        devices[did]["name"] = new
+        conn = self.conns.get(did)
+        if conn and not conn["ws"].closed:
+            asyncio.ensure_future(conn["ws"].send_json({"type": "set_name", "name": new}))
+        else:
+            devices[did]["pending_name"] = new
+        self._save_devices(devices)
+        return did
+
+    def _prune(self, days: float) -> list[str]:
+        """Forget paired browsers that have not connected for `days` days (never one that is connected now)."""
+        devices = self._devices()
+        cutoff = time.time() - days * 86400
+        gone = [d for d, v in devices.items() if v.get("last_seen", 0) < cutoff and d not in self.conns]
+        for d in gone:
+            devices.pop(d)
+        if gone:
             self._save_devices(devices)
+        return gone
 
     def _revoke(self, who: str) -> list[str]:
         devices = self._devices()
@@ -291,12 +334,14 @@ class Hub:
         if did in self.conns:  # the same browser reconnecting: its new socket wins; other browsers are untouched
             await self.conns[did]["ws"].close(code=4000, message=b"replaced by a newer connection")
         self.conns[did] = {"ws": ws, "info": {"browser": msg.get("browser"), "version": msg.get("version")}}
-        self._touch(did, msg.get("deviceName"))
+        adopted = self._touch(did, msg.get("deviceName"), msg.get("browser"))
         if self.current not in self.conns:
             self.current = did
         log.info("hermes-chrome: browser connected: %s (%s %s)", self._name(did), msg.get("browser"), msg.get("version"))
         await ws.send_json({"type": "welcome", "agentName": self.agent_name, "profile": self.profile, "pluginVersion": PLUGIN_VERSION,
                             "intentCheck": True})
+        if adopted:  # renamed from chat while this browser was away
+            await ws.send_json({"type": "set_name", "name": adopted})
         try:
             async for m in ws:
                 if m.type != WSMsgType.TEXT:
@@ -390,6 +435,10 @@ class Hub:
                 result = self._new_code()
             elif method == "__revoke":
                 result = self._revoke(params.get("who", ""))
+            elif method == "__rename":
+                result = self._rename(params.get("who", ""), params.get("new", ""))
+            elif method == "__prune":
+                result = self._prune(float(params.get("days") or 30))
             elif method == "__request":
                 self.request = (str(params.get("text") or "")[:4000], time.time())
                 result = True
@@ -507,7 +556,8 @@ class Hub:
                         for d, c in self.conns.items() if not c["ws"].closed]
             current = self._name(self.current) if self.current in self.conns else None
             return {"connected": bool(browsers), "device": current, "browsers": browsers, "address": self.address,
-                    "devices": [{"id": d, "name": v["name"], "last_seen": v["last_seen"]} for d, v in self._devices().items()]}
+                    "devices": [{"id": d, "name": v["name"], "last_seen": v["last_seen"], "browser": v.get("browser"),
+                                 "online": d in self.conns and not self.conns[d]["ws"].closed} for d, v in self._devices().items()]}
         try:
             return self._rpc({"method": "__status"}, 2)
         except Exception:
@@ -518,6 +568,18 @@ class Hub:
         if self.owner:
             return asyncio.run_coroutine_threadsafe(self._async(self._new_code), self.loop).result(5)
         return self._rpc({"method": "__pair"}, 5)
+
+    def rename(self, who: str, new: str) -> str | None:
+        self.ready.wait(5)
+        if self.owner:
+            return asyncio.run_coroutine_threadsafe(self._async(self._rename, who, new), self.loop).result(5)
+        return self._rpc({"method": "__rename", "params": {"who": who, "new": new}}, 5)
+
+    def prune(self, days: float) -> list[str]:
+        self.ready.wait(5)
+        if self.owner:
+            return asyncio.run_coroutine_threadsafe(self._async(self._prune, days), self.loop).result(5)
+        return self._rpc({"method": "__prune", "params": {"days": days}}, 5)
 
     def revoke(self, who: str) -> list[str]:
         self.ready.wait(5)

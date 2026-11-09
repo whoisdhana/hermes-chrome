@@ -5,7 +5,6 @@ Setup for users: enable the plugin, run /chrome pair, paste the code into the ex
 from __future__ import annotations
 
 import time
-from datetime import datetime
 from pathlib import Path
 
 import threading
@@ -17,7 +16,9 @@ from .tools import TOOLS, make_handler
 HELP = """/chrome_pair      new pairing code for the Hermes Chrome extension (5 minutes, one use)
 /chrome pair      same
 /chrome status    is a browser connected?
-/chrome devices   paired browsers
+/chrome devices   paired browsers (online or offline, last seen)
+/chrome rename <name or id> to <new name>   rename a browser
+/chrome prune [days]   forget browsers not seen for that many days (default 30)
 /chrome revoke <name or id | all>   unpair a browser"""
 
 
@@ -89,6 +90,15 @@ def _setup_cli(parser):
     parser.add_argument("rest", nargs="*")
 
 
+def _ago(ts: float) -> str:
+    s = max(0, time.time() - ts)
+    for unit, n in (("day", 86400), ("hour", 3600), ("minute", 60)):
+        if s >= n:
+            k = int(s // n)
+            return f"{k} {unit}{'s' if k != 1 else ''} ago"
+    return "just now"
+
+
 def command(hub: Hub, raw: str, cli: bool = False) -> str:
     action, _, arg = (raw or "").strip().partition(" ")
     action = action or "help"
@@ -116,7 +126,24 @@ def command(hub: Hub, raw: str, cli: bool = False) -> str:
         devs = hub.status().get("devices") or []
         if not devs:
             return "No paired browsers. Run /chrome pair."
-        return "\n".join(f"{d['name']} (id {d['id']}), last seen {datetime.fromtimestamp(d['last_seen']):%Y-%m-%d %H:%M}" for d in devs)
+        def line(d):
+            state = "● online" if d.get("online") else f"○ offline, last seen {_ago(d['last_seen'])}"
+            stale = " (not seen for over 30 days: /chrome prune)" if not d.get("online") and time.time() - d["last_seen"] > 30 * 86400 else ""
+            return f"{d['name']}{' · ' + d['browser'].split('/')[0] if d.get('browser') else ''}: {state}{stale}"
+        return "\n".join(line(d) for d in sorted(devs, key=lambda d: (not d.get("online"), -d["last_seen"])))
+    if action == "rename":
+        old, sep, new = arg.partition(" to ")
+        if not sep or not old.strip() or not new.strip():
+            return "Usage: /chrome rename <name or id> to <new name>"
+        did = hub.rename(old.strip(), new.strip())
+        return f"Renamed to {new.strip()[:60]!r}." if did else f"No single paired browser matches {old.strip()!r}. See /chrome devices."
+    if action == "prune":
+        try:
+            days = float(arg) if arg.strip() else 30
+        except ValueError:
+            return "Usage: /chrome prune [days]"
+        gone = hub.prune(days)
+        return f"Forgot {len(gone)} browser(s) not seen for {days:g} days." if gone else f"No browser has been away for {days:g} days." 
     if action == "revoke":
         if not arg:
             return "Usage: /chrome revoke <name or id | all>"

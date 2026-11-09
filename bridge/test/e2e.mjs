@@ -28,7 +28,11 @@ const PAGE = `<!doctype html><title>HC test</title>
 <p id="out"></p><div style="height:2000px"></div><a href="/two">Next page</a>
 <div style="position:relative;display:inline-block"><button>Covered button</button><div style="position:absolute;inset:0"></div></div></body>`;
 const pageServer = http.createServer((req, res) => {
-  if (req.url === '/redir') { res.writeHead(302, { location: `http://localhost:${PAGE_PORT}/two` }); return res.end(); }
+  if (req.url === '/captcha') { // a stand-in challenge: a widget box and the token field real CAPTCHAs fill in when solved
+    res.writeHead(200, { 'content-type': 'text/html' });
+    return res.end('<title>Check</title><div class="g-recaptcha" style="width:300px;height:80px;border:1px solid #ccc">I am not a robot</div><textarea name="g-recaptcha-response" style="display:none"></textarea>');
+  }
+    if (req.url === '/redir') { res.writeHead(302, { location: `http://localhost:${PAGE_PORT}/two` }); return res.end(); }
   res.writeHead(200, { 'content-type': 'text/html' });
   res.end(req.url === '/two' ? '<title>Two</title><h1>Page two</h1>' : PAGE);
 }).listen(PAGE_PORT);
@@ -143,12 +147,12 @@ try {
     assert.equal(await options.isVisible('#unpair'), true);
     assert.equal(await options.isVisible('#repair'), true);
     await options.screenshot({ path: path.join(SHOTS, 'hc-settings-paired.png'), fullPage: true });
-    await options.click('#keepTabs');
+    await options.click('#confirmRisky');
     assert.equal(await options.textContent('#saved'), 'Unsaved changes');
     await options.click('#save');
     await options.waitForFunction(() => document.querySelector('#saved').textContent === 'Saved');
-    assert.equal(await sw.evaluate(() => chrome.storage.local.get('keepTabs').then((s) => s.keepTabs)), true);
-    await options.click('#keepTabs');
+    assert.equal(await sw.evaluate(() => chrome.storage.local.get('confirmRisky').then((s) => s.confirmRisky)), false);
+    await options.click('#confirmRisky');
     await options.click('#save');
     await options.waitForFunction(() => document.querySelector('#saved').textContent === 'Saved');
   });
@@ -284,6 +288,17 @@ try {
     await p.screenshot({ path: path.join(SHOTS, 'hc-handoff.png') });
     await p.keyboard.press('Enter');
     assert.match((await pending).text, /user says they are done/);
+  });
+  await step('handoff on a CAPTCHA continues by itself once it is solved', async () => {
+    await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/captcha` });
+    const p = ctx.pages().find((pg) => pg.url().endsWith('/captcha'));
+    const pending = call('handoff', { tabId, message: 'Please solve the CAPTCHA.', timeoutSec: 60 });
+    await sleep(1500);
+    await p.evaluate(() => { document.querySelector('textarea[name="g-recaptcha-response"]').value = 'token-from-the-person'; });
+    const t0 = Date.now();
+    assert.match((await pending).text, /completed by the user/);
+    assert.ok(Date.now() - t0 < 6000, 'noticed within a few seconds, no Done needed');
+    await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/` });
   });
   await step('navigate + back', async () => {
     assert.match((await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/two` })).text, /Two/);

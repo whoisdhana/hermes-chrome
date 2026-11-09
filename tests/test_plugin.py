@@ -113,7 +113,7 @@ class FakeExtension:
     async def _loop(self):
         async for m in self.ws:
             data = json.loads(m.data)
-            if data.get("type") in ("chat_event", "chat_meta", "skill_saved", "recordings", "recording_run", "intent_result"):
+            if data.get("type") in ("chat_event", "chat_meta", "skill_saved", "recordings", "recording_run", "intent_result", "set_name"):
                 self.events.append(data)
             elif "id" in data:
                 self.calls.append(data)
@@ -438,6 +438,47 @@ class IntentCheckTest(unittest.TestCase):
         self.assertTrue(wait_for(lambda: any(e.get("type") == "intent_result" for e in ext.events), 5))
         res = next(e for e in ext.events if e.get("type") == "intent_result")
         self.assertEqual((res["id"], res["ok"], res["reason"]), ("c1", False, "Not asked for."))
+
+
+class DevicesTest(unittest.TestCase):
+    """Online/offline listing, renaming from chat (live and offline), pruning browsers that went away."""
+    PORT = 18793
+
+    def test_devices_rename_prune(self):
+        ctx = FakeCtx(tempfile.mkdtemp(), {"port": self.PORT, "advertise_host": "127.0.0.1", "agent_name": "Delulu"})
+        plugin.register(ctx)
+        hub = ctx.tools["chrome_open"].__closure__[0].cell_contents
+        self.assertTrue(wait_for(lambda: hub.owner))
+        cmd = ctx.commands["chrome"]
+        pair = lambda: FakeExtension(self.PORT)
+        a, b = pair(), pair()
+        code = lambda: next(l for l in cmd("pair").splitlines() if l.startswith("HC-"))
+        pa, pb = a.run(a.pair(code())), b.run(b.pair(code()))
+        a.run(a.connect(pa["deviceId"], pa["deviceKey"], "Work Brave"))
+        self.assertTrue(wait_for(lambda: hub.connected))
+        listing = cmd("devices")
+        self.assertRegex(listing, r"Work Brave · Chrome: ● online")
+        self.assertIn("○ offline", listing)
+        # rename the connected browser: it is told at once
+        self.assertIn("Renamed", cmd("rename Work Brave to Agency Brave"))
+        self.assertTrue(wait_for(lambda: any(e.get("type") == "set_name" and e.get("name") == "Agency Brave" for e in a.events), 5))
+        # rename the offline one: it adopts the name when it next connects
+        self.assertIn("Renamed", cmd(f"rename {pb['deviceId']} to Home Chrome"))
+        welcome = b.run(b.connect(pb["deviceId"], pb["deviceKey"], "Test Chrome"))
+        self.assertEqual(welcome["type"], "welcome")
+        self.assertTrue(wait_for(lambda: any(e.get("type") == "set_name" and e.get("name") == "Home Chrome" for e in b.events), 5))
+        self.assertEqual(ctx.state.get("devices")[pb["deviceId"]]["name"], "Home Chrome")
+        self.assertIn("Usage", cmd("rename nothing"))
+        # prune: only browsers that are away
+        b.run(b.close())
+        self.assertTrue(wait_for(lambda: pb["deviceId"] not in [d for d, c in hub.conns.items() if not c["ws"].closed], 5))
+        devices = ctx.state.get("devices")
+        devices[pb["deviceId"]]["last_seen"] -= 40 * 86400
+        devices[pa["deviceId"]]["last_seen"] -= 40 * 86400  # connected right now, so it stays
+        ctx.state.set("devices", devices)
+        self.assertIn("not seen for over 30 days", cmd("devices"))
+        self.assertIn("Forgot 1 browser", cmd("prune 30"))
+        self.assertEqual(list(ctx.state.get("devices")), [pa["deviceId"]])
 
 
 class TunnelTest(unittest.TestCase):

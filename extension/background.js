@@ -66,6 +66,7 @@ async function connect() {
   sock.onmessage = (e) => {
     let m;
     try { m = JSON.parse(e.data); } catch { return; }
+    if (m.type === 'set_name' && m.name) { chrome.storage.local.set({ deviceName: String(m.name).slice(0, 60) }); return; } // renamed from chat
     if (m.type === 'intent_result') { intentWaiters.get(m.id)?.(m); intentWaiters.delete(m.id); return; }
     if (m.type === 'welcome') {
       canCheck = !!m.intentCheck;
@@ -85,9 +86,9 @@ async function connect() {
       try { port.postMessage({ type: 'chat_event', chatId, kind: 'error', message: 'The connection to Hermes dropped before the reply arrived. Please ask again.' }); } catch {}
     }
     chatPorts.clear();
-    if (e.code === 4001) { // unknown or revoked device: stop retrying until the user pairs again
+    if (e.code === 4001) { // unknown or revoked device: forget the key and stop retrying until the user pairs again
       setBadge('err');
-      chrome.storage.local.set({ pairError: 'This browser is no longer paired. Run /chrome pair and paste the new code.' });
+      chrome.storage.local.set({ deviceKey: '', deviceId: '', pairError: 'This browser was unpaired from Hermes (or forgotten after a long time away). Send /chrome pair to your agent and paste the new code to use it again.' });
       return;
     }
     setBadge('off');
@@ -96,8 +97,17 @@ async function connect() {
   sock.onerror = () => {};
 }
 
-const CHROME = navigator.userAgent.match(/Chrome\/[\d.]+/)?.[0];
-const defaultDeviceName = () => `Chrome on ${navigator.userAgentData?.platform || 'computer'}`;
+// Which browser this is (Brave, Edge and friends all say "Chrome" in the user agent), for device names and /chrome devices.
+function browserBrand() {
+  const brands = (navigator.userAgentData?.brands || []).map((b) => b.brand);
+  for (const [match, name] of [['Brave', 'Brave'], ['Edge', 'Edge'], ['Opera', 'Opera'], ['Vivaldi', 'Vivaldi'], ['Arc', 'Arc']]) {
+    if (brands.some((b) => b.includes(match))) return name;
+  }
+  if (navigator.brave) return 'Brave';
+  return brands.includes('Google Chrome') || !brands.includes('Chromium') ? 'Chrome' : 'Chromium';
+}
+const CHROME = `${browserBrand()}/${navigator.userAgent.match(/Chrome\/([\d.]+)/)?.[1] || ''}`;
+const defaultDeviceName = () => `${browserBrand()} on ${navigator.userAgentData?.platform || 'computer'}`;
 
 // Pair with a code from "/chrome pair": HC-XXXX-XXXX@host:port (Tailscale/LAN, optional → this machine)
 // or HC-XXXX-XXXX@wss://hermes.example.com/ext (Hermes behind an HTTPS tunnel).
@@ -875,8 +885,9 @@ const METHODS = {
     return ok(await page(tab.id, 'text', { maxChars }));
   },
 
-  async screenshot({ tabId }) {
+  async screenshot({ tabId, forPing }) {
     const tab = await resolveTab(tabId);
+    if (forPing && await hostWatched(tab.url)) return { text: 'no picture of this site leaves the browser' }; // bank, mail, payments
     await chrome.tabs.update(tab.id, { active: true });
     await pageQuiet(tab.id, 'overlayVisible', { on: false });
     try {
@@ -984,7 +995,7 @@ const METHODS = {
       refreshIndicators();
     }
     const t = await chrome.tabs.get(tab.id);
-    const note = { done: 'The user says they are done.', skipped: 'The user skipped this step.', timeout: 'No response before the timeout.', 'page-changed': 'The page navigated while waiting (the user probably completed the step).' }[status];
+    const note = { solved: 'The challenge on the page was completed by the user. Continue from where the page is now.', done: 'The user says they are done.', skipped: 'The user skipped this step.', timeout: 'No response before the timeout.', 'page-changed': 'The page navigated while waiting (the user probably completed the step).' }[status];
     return ok(`${note} Now at ${t.url}. Call read_page to continue.`);
   },
 

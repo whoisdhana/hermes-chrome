@@ -427,6 +427,19 @@
   }
 
   // ------------------------------------------------------------ API (called by background.js)
+  // CAPTCHA and bot challenges. The agent never solves them; it hands them to the person and notices when they are done.
+  const CHALLENGE = 'iframe[src*="recaptcha"], iframe[src*="hcaptcha.com"], iframe[src*="challenges.cloudflare.com"], iframe[src*="arkoselabs"],'
+    + ' iframe[src*="funcaptcha"], iframe[src*="geetest"], iframe[src*="captcha-delivery.com"], #challenge-form, #cf-challenge-running, .g-recaptcha, .h-captcha, .cf-turnstile';
+  const TOKENS = 'textarea[name="g-recaptcha-response"], textarea[name="h-captcha-response"], input[name="cf-turnstile-response"]';
+  function challengeState() {
+    if ([...document.querySelectorAll(TOKENS)].some((t) => t.value)) return 'solved';
+    const open = [...document.querySelectorAll(CHALLENGE)].some((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 20 && r.height > 20 && getComputedStyle(el).visibility !== 'hidden';
+    });
+    return open ? 'open' : 'none';
+  }
+
   const API = {
     configure({ name }) { agentName = name || agentName; },
 
@@ -544,6 +557,7 @@
 
     handoff({ message, timeoutSec = 600 }) {
       const u = overlay();
+      const watchChallenge = challengeState() === 'open'; // a CAPTCHA is on screen: continue by itself once it is solved
       u.root.querySelector('.handoff')?.remove();
       const box = document.createElement('div');
       box.className = 'handoff';
@@ -557,6 +571,14 @@
         const t = setTimeout(() => finish('timeout'), timeoutSec * 1000);
         box.querySelector('.done').addEventListener('click', () => finish('done'));
         box.querySelector('.skip').addEventListener('click', () => finish('skipped'));
+        if (watchChallenge) {
+          let clear = 0;
+          const poll = setInterval(() => {
+            if (!box.isConnected) return clearInterval(poll);
+            clear = challengeState() === 'open' ? 0 : clear + 1;
+            if (clear >= 2) { clearInterval(poll); finish('solved'); } // solved (token filled in) or gone for 2 s
+          }, 1000);
+        }
       });
     },
 
