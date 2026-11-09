@@ -604,6 +604,12 @@ function renderUpdate(n) {
   }
 }
 chrome.storage.onChanged.addListener((c, area) => { if (area === 'local' && c.updateNote) renderUpdate(c.updateNote.newValue); });
+// Pairing or unpairing while the panel is open: switch between the "Pair this browser" screen and the chat at once.
+chrome.storage.onChanged.addListener((c, area) => {
+  if (area !== 'local' || !('deviceKey' in c)) return;
+  paired = !!c.deviceKey.newValue;
+  if (!entries.length) emptyState();
+});
 
 (async () => {
   const s = await chrome.storage.local.get({ agentName: 'Hermes', chatLog: [], deviceKey: '', showSteps: false });
