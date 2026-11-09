@@ -25,8 +25,11 @@ TOOLS = [
         "Which of the user's browsers are connected (by name; the default is marked) and the agent's tabs. Call this first for browser work.")),
     ("chrome_tabs", "tabs_list", _schema("chrome_tabs", "List the tabs in the agent's tab group.")),
     ("chrome_open", "tab_open", _schema("chrome_open",
-        "Open a URL in a new tab in the agent's tab group of the user's real Chrome (their logins and cookies) and wait for it to load.",
-        {"url": {"type": "string"}, "why": WHY}, ["url"])),
+        "Open a URL in the agent's tab in the user's real Chrome (their logins and cookies) and wait for it to load. "
+        "By default this reuses your main tab. Set newTab=true only to work on several pages side by side (research, "
+        "comparing options); those extra tabs close when you call chrome_report.",
+        {"url": {"type": "string"}, "why": WHY,
+         "newTab": {"type": "boolean", "description": "Open an extra tab instead of reusing the main one (parallel research only)."}}, ["url"])),
     ("chrome_close", "tab_close", _schema("chrome_close", "Close one of the agent's tabs.", {"tabId": TAB})),
     ("chrome_navigate", "navigate", _schema("chrome_navigate",
         'Navigate a tab to a URL and wait for load. Use "back" or "forward" for history.',

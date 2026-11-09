@@ -2,6 +2,8 @@
 // Run: npm i --no-save playwright && npx playwright install chromium && node test/e2e.mjs
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import https from 'node:https';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,6 +30,14 @@ const pageServer = http.createServer((req, res) => {
   res.writeHead(200, { 'content-type': 'text/html' });
   res.end(req.url === '/two' ? '<title>Two</title><h1>Page two</h1>' : PAGE);
 }).listen(PAGE_PORT);
+
+// HTTPS page with a self-signed certificate: Chromium shows a certificate warning for it.
+const TLS_PORT = 8802;
+const tlsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-tls-'));
+execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost',
+  '-keyout', path.join(tlsDir, 'k.pem'), '-out', path.join(tlsDir, 'c.pem')], { stdio: 'ignore' });
+const tlsServer = https.createServer({ key: fs.readFileSync(path.join(tlsDir, 'k.pem')), cert: fs.readFileSync(path.join(tlsDir, 'c.pem')) },
+  (req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<title>Untrusted</title><h1>Untrusted</h1>'); }).listen(TLS_PORT);
 
 // Mock Hermes API server: streams one tool call and a short answer for /v1/responses.
 const HERMES_PORT = 8801;
@@ -198,6 +208,24 @@ try {
     assert.match(await pending, /did not allow/);
     assert.doesNotMatch((await call('get_text', { tabId })).text, /DELETED/);
   });
+  await step('watched site: typing and keys wait for approval', async () => {
+    const p = ctx.pages().find((pg) => pg.url().startsWith(`http://127.0.0.1:${PAGE_PORT}`));
+    const starter = await sw.evaluate(() => chrome.storage.local.get(['blockedHosts', 'watchHosts']));
+    assert.match(starter.blockedHosts, /1password\.com/, 'starter block list installed');
+    assert.match(starter.watchHosts, /mail\.google\.com/, 'starter watch list installed');
+    await sw.evaluate(() => chrome.storage.local.set({ watchHosts: '127.0.0.1' }));
+    const ref = refOf(outline, /textbox "Full name"/);
+    let pending = call('type', { tabId, ref, text: 'Watched', clear: true }).then(() => 'resolved', (e) => e.message);
+    await sleep(1500);
+    await p.keyboard.press('Enter'); // Deny has focus
+    assert.match(await pending, /did not allow/);
+    pending = call('press_key', { tabId, key: 'Tab' }).then(() => 'resolved', (e) => e.message);
+    await sleep(1500);
+    await p.keyboard.press('Tab'); // focus moves from Deny to Allow
+    await p.keyboard.press('Enter');
+    assert.equal(await pending, 'resolved');
+    await sw.evaluate(() => chrome.storage.local.set({ watchHosts: '' }));
+  });
   await step('screenshot returns image', async () => {
     const r = await call('screenshot', { tabId });
     assert.ok(r.content.some((c) => c.type === 'image' && c.data.length > 1000));
@@ -223,6 +251,16 @@ try {
     await sw.evaluate(() => chrome.storage.local.set({ blockedHosts: 'example.com' }));
     await sleep(300);
     await assert.rejects(call('tab_open', { url: 'https://www.example.com/' }), /blocked/);
+  });
+  await step('non-web addresses and certificate warnings are refused', async () => {
+    await sw.evaluate(() => chrome.storage.local.set({ blockedHosts: '' }));
+    for (const url of ['file:///etc/hosts', 'chrome://settings', 'javascript:alert(1)', 'data:text/html,hi', 'view-source:https://example.com']) {
+      await assert.rejects(call('tab_open', { url }), /only opens http and https/, url);
+      await assert.rejects(call('navigate', { tabId, url }), /only opens http and https/, url);
+    }
+    await assert.rejects(call('tab_open', { url: `https://localhost:${TLS_PORT}/`, newTab: true }), /certificate warning/);
+    await assert.rejects(call('read_page', {}), /certificate warning/, 'the warning tab stays off limits');
+    await call('report', { summary: 'Refused the warning page' }); // closes the extra tab
   });
   const testPage = () => ctx.pages().find((pg) => pg.url().startsWith(`http://127.0.0.1:${PAGE_PORT}`));
   await step('plan strip, intent caption, tab group progress', async () => {
@@ -270,6 +308,27 @@ try {
     const stats = JSON.parse(r.text);
     assert.ok(stats.steps >= 2);
     assert.ok(r.content.some((c) => c.type === 'image'));
+  });
+  await step('one tab by default; newTab for side-by-side work; report closes the extras', async () => {
+    const count = async () => JSON.parse((await call('tabs_list')).text).length;
+    const before = await count();
+    const again = JSON.parse((await call('tab_open', { url: `http://127.0.0.1:${PAGE_PORT}/?one` })).text);
+    assert.equal(again.tabId, tabId, 'chrome_open reuses the main agent tab');
+    assert.equal(await count(), before, 'no new tab');
+    const extra = JSON.parse((await call('tab_open', { url: `http://127.0.0.1:${PAGE_PORT}/?two`, newTab: true })).text);
+    assert.notEqual(extra.tabId, tabId);
+    assert.equal(await count(), before + 1, 'newTab opens one extra tab');
+    const third = JSON.parse((await call('tab_open', { url: `http://127.0.0.1:${PAGE_PORT}/?three` })).text);
+    assert.equal(third.tabId, tabId, 'without newTab the main tab is reused, not the extra one');
+    const r = JSON.parse((await call('report', { summary: 'Compared two pages' })).text);
+    assert.equal(r.closedExtraTabs, 1);
+    assert.equal(await count(), before, 'extra tab closed, main tab kept');
+    await sw.evaluate(() => chrome.storage.local.set({ keepTabs: true }));
+    await call('tab_open', { url: `http://127.0.0.1:${PAGE_PORT}/?four`, newTab: true });
+    assert.equal(JSON.parse((await call('report', { summary: 'Kept' })).text).closedExtraTabs, 0, 'keepTabs leaves extras open');
+    await sw.evaluate(() => chrome.storage.local.set({ keepTabs: false }));
+    await call('report', { summary: 'Tidy' });
+    assert.equal(await count(), before);
   });
   await step('teach: record a task, save it, replay it with a variable', async () => {
     const p = testPage();
@@ -401,6 +460,7 @@ try {
   await ctx?.close().catch(() => {});
   bridge.kill();
   pageServer.close();
+  tlsServer.close();
   hermesMock.close();
   fs.rmSync(userData, { recursive: true, force: true });
   fs.rmSync(stateDir, { recursive: true, force: true });

@@ -274,7 +274,8 @@ const why = z.string().optional().describe('Short reason shown to the user next 
 export const TOOLS = [
   ['browser_status', 'Check whether the browser is connected and list the agent tabs. Call this first; if it reports unavailable, tell the user and stop.', {}],
   ['tabs_list', 'List the tabs in the agent tab group.', {}],
-  ['tab_open', 'Open a URL in a new tab inside the agent tab group and wait for it to load.', { url: z.string(), why }],
+  ['tab_open', 'Open a URL in the agent tab and wait for it to load. Reuses the main agent tab by default; newTab=true opens an extra tab for side-by-side work, closed again by report.',
+    { url: z.string(), why, newTab: z.boolean().optional().describe('Open an extra tab instead of reusing the main one (parallel research only).') }],
   ['tab_close', 'Close an agent tab.', { tabId }],
   ['navigate', 'Navigate a tab to a URL and wait for load. Use "back" or "forward" for history.', { tabId, url: z.string(), why }],
   ['read_page', 'Outline of the page: interactive elements (and headings/text when interactiveOnly=false) with refs to use in click/type.', { tabId, interactiveOnly: z.boolean().optional() }],

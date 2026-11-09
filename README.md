@@ -2,7 +2,7 @@
 
 Let your [Hermes Agent](https://hermes-agent.nousresearch.com) use your real Chrome, from any channel you talk to it on (Telegram, Discord, cron jobs, the CLI) or from a chat in Chrome's side panel.
 
-You watch it work: an agent cursor glides to each target, clicks ripple, the page glows while it is busy, and every tab it opens lives in its own tab group (`⏳ Hermes` while working, `✅ Hermes` when idle, `✋ Hermes` when it needs you). When it hits a CAPTCHA, a login or 2FA, it stops and shows a "needs you" banner; you finish the step and press Done.
+You watch it work: an agent cursor glides to each target, clicks ripple, the page glows while it is busy, and it works in one tab inside its own tab group (`⏳ Hermes` while working, `✅ Hermes` when idle, `✋ Hermes` when it needs you). When it hits a CAPTCHA, a login or 2FA, it stops and shows a "needs you" banner; you finish the step and press Done.
 
 ```
  Telegram / CLI / cron / side panel
@@ -84,7 +84,10 @@ On by default. The real pointer travels along the same curve as the visible curs
 Read [SECURITY.md](SECURITY.md) for exactly what data is stored where and what leaves your machine.
 
 - The agent only acts on tabs in its own group, never on your other tabs.
-- **Blocked sites**: hosts the agent refuses to open or touch (your bank, for example).
+- **One tab by default**: it reuses its own tab for each new page and opens extra tabs only for side-by-side work (research, comparing prices). Extra tabs close when the task ends, unless you turn on **Keep extra tabs open**. A tab you shared with it is never navigated away or closed.
+- **Web pages only**: `file://`, `chrome://`, `javascript:`, `data:` and similar addresses are refused, and it stops at certificate (TLS) warnings instead of clicking through.
+- **Blocked sites**: hosts the agent refuses to open or touch. Starts with password-manager vaults (1Password, Bitwarden, LastPass…).
+- **Ask me first**: on these hosts every click, keystroke and form submit waits for your OK. Starts with webmail, payment apps, banks and brokers. Both lists are editable in Settings.
 - **Risky clicks** (pay, buy, delete, send, publish, post…) show an Allow / Deny banner first. Deny is the default focus.
 - **Pairing**: codes are single use, expire after 5 minutes (on Telegram the code message deletes itself then), and five wrong attempts cancel all open codes. Each browser gets its own key; Hermes stores only its hash. `/chrome devices` lists them, `/chrome revoke <name>` cuts one off immediately. Nothing secret ever goes in a URL.
 - Use Tailscale, a LAN, or an HTTPS tunnel with `public_url` (see Setup) between laptop and server; never expose the raw port to the internet.

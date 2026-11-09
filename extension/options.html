@@ -43,9 +43,12 @@
         <option>orange</option><option>blue</option><option>purple</option><option>green</option>
         <option>red</option><option>yellow</option><option>cyan</option><option>pink</option><option>grey</option>
       </select></label>
-    <label>Blocked sites <small>The agent refuses to open or act on these hosts (and their subdomains). One per line, e.g. mybank.com</small>
+    <label>Blocked sites <small>The agent refuses to open or act on these hosts (and their subdomains). One per line, e.g. mybank.com. Starts with password-manager vaults.</small>
       <textarea id="blockedHosts"></textarea></label>
+    <label>Ask me first on these sites <small>Every click, keystroke and form submit on these hosts waits for your OK. Starts with webmail, payment apps, banks and brokers. One per line.</small>
+      <textarea id="watchHosts"></textarea></label>
     <label class="check"><input id="humanPace" type="checkbox"> <span>Human pace <small><br>Real mouse movement, one key at a time, short pauses. Slower, but sites react as they would to you.</small></span></label>
+    <label class="check"><input id="keepTabs" type="checkbox"> <span>Keep extra tabs open after a task <small><br>The agent works in one tab and opens more only for side-by-side research. Off: it closes those extra tabs when the task ends.</small></span></label>
     <label class="check"><input id="showSteps" type="checkbox"> <span>Show each step in chat <small><br>List every browser action in the side-panel chat. Off: one live status line while the agent works (all steps stay in Activity).</small></span></label>
     <label class="check"><input id="confirmRisky" type="checkbox"> <span>Ask me before risky clicks <small><br>Pay, buy, delete, send, publish, post…</small></span></label>
     <label class="check"><input id="allowEval" type="checkbox"> <span>Allow the agent to run JavaScript in pages <small><br>Powerful and risky. Leave off unless you need it.</small></span></label>

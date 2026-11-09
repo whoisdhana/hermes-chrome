@@ -17,7 +17,24 @@ const DEFAULTS = {
   confirmRisky: true,
   allowEval: false,
   humanPace: true,
+  keepTabs: false, // keep the extra tabs open after a task instead of closing them
+  watchHosts: '',   // every click, keystroke and form submit needs the user's OK on these hosts
 };
+
+// Starter lists, added once on install or update (users edit them in Settings). Password-manager vaults
+// are blocked outright; webmail, payments, banks and brokers need approval for every action.
+const STARTER_BLOCKED = ['1password.com', 'bitwarden.com', 'lastpass.com', 'dashlane.com', 'keepersecurity.com', 'nordpass.com',
+  'pass.proton.me', 'passwords.google.com'];
+const STARTER_WATCH = ['mail.google.com', 'outlook.live.com', 'outlook.office.com', 'mail.yahoo.com', 'mail.proton.me',
+  'paypal.com', 'stripe.com', 'razorpay.com', 'paytm.com', 'phonepe.com', 'wise.com',
+  'onlinesbi.sbi', 'hdfcbank.com', 'icicibank.com', 'axisbank.com', 'kotak.com', 'zerodha.com', 'groww.in',
+  'chase.com', 'bankofamerica.com', 'wellsfargo.com', 'citi.com', 'hsbc.com', 'schwab.com', 'fidelity.com', 'robinhood.com'];
+chrome.runtime.onInstalled.addListener(async () => {
+  const s = await chrome.storage.local.get({ starterLists: 0, blockedHosts: '', watchHosts: '' });
+  if (s.starterLists >= 1) return;
+  const merge = (cur, add) => [...new Set([...cur.split(/[\s,]+/).filter(Boolean), ...add])].join('\n');
+  await chrome.storage.local.set({ starterLists: 1, blockedHosts: merge(s.blockedHosts, STARTER_BLOCKED), watchHosts: merge(s.watchHosts, STARTER_WATCH) });
+});
 const RISKY = /\b(pay|buy|purchase|place order|checkout|delete|remove account|send|publish|post|transfer|confirm payment|subscribe|unsubscribe)\b/i;
 
 const settings = () => chrome.storage.local.get(DEFAULTS);
@@ -211,11 +228,32 @@ async function agentTabs() {
   return gid == null ? [] : chrome.tabs.query({ groupId: gid });
 }
 
-async function hostBlocked(url) {
-  const s = await settings();
+function hostIn(list, url) {
   let host;
   try { host = new URL(url).hostname; } catch { return false; }
-  return s.blockedHosts.split(/[\s,]+/).filter(Boolean).some((b) => host === b || host.endsWith('.' + b));
+  return list.split(/[\s,]+/).filter(Boolean).some((b) => host === b || host.endsWith('.' + b));
+}
+async function hostBlocked(url) { return hostIn((await settings()).blockedHosts, url); }
+async function hostWatched(url) { return hostIn((await settings()).watchHosts, url); }
+
+// Only web pages. file://, chrome://, javascript:, data: and the like are refused outright: a hijacked
+// agent could otherwise read local files or browser internals.
+function refuseUnsafeUrl(url) {
+  if (url === 'back' || url === 'forward' || /^(https?:\/\/|about:blank$)/i.test(url || '')) return;
+  const scheme = (String(url).match(/^([a-z][a-z0-9+.-]*):/i)?.[1] || 'that').toLowerCase();
+  throw new Error(`Refused: the agent only opens http and https pages, not ${scheme}: addresses.`);
+}
+
+// Certificate (TLS) warnings: the agent must never click through them.
+const certErrors = new Map(); // tabId -> net error
+chrome.webNavigation.onErrorOccurred.addListener(({ tabId, frameId, error }) => {
+  if (frameId === 0 && /ERR_(CERT|SSL)_|ERR_BAD_SSL/.test(error)) certErrors.set(tabId, error);
+});
+chrome.webNavigation.onBeforeNavigate.addListener(({ tabId, frameId }) => { if (frameId === 0) certErrors.delete(tabId); });
+chrome.tabs.onRemoved.addListener((id) => certErrors.delete(id));
+function refuseCertError(tabId) {
+  const err = certErrors.get(tabId);
+  if (err) throw new Error(`This tab shows a certificate warning (${err}): the connection to the site is not secure. Do not continue or click through it. Tell the user and stop.`);
 }
 
 async function resolveTab(tabId) {
@@ -225,11 +263,40 @@ async function resolveTab(tabId) {
   const tab = tabs.find((t) => t.id === id);
   if (!tab) throw new Error(`Tab ${id} is not in the agent tab group. Use tabs_list or tab_open.`);
   if (await hostBlocked(tab.url)) throw new Error(`The user has blocked the agent on ${new URL(tab.url).hostname}.`);
+  refuseCertError(id);
   lastTabId = id;
   return tab;
 }
 
-chrome.tabs.onRemoved.addListener((id) => { if (id === lastTabId) lastTabId = null; attached.delete(id); });
+chrome.tabs.onRemoved.addListener((id) => { if (id === lastTabId) lastTabId = null; attached.delete(id); forgetTab(id); });
+
+// ------------------------------------------------------------ which tabs the agent opened
+// own: tabs the agent created (safe to reuse for the next page). extra: opened with newTab for parallel
+// work, closed at the end of the task. Tabs the user shared ("Use this tab") are neither, so they are
+// never navigated away or closed. Kept in session storage so a service-worker restart does not forget them.
+async function tabSets() {
+  const { hcTabs } = await chrome.storage.session.get('hcTabs');
+  return { own: new Set(hcTabs?.own || []), extra: new Set(hcTabs?.extra || []) };
+}
+async function saveTabSets(t) { await chrome.storage.session.set({ hcTabs: { own: [...t.own], extra: [...t.extra] } }); }
+async function rememberTab(id, extra) { const t = await tabSets(); t.own.add(id); if (extra) t.extra.add(id); await saveTabSets(t); }
+async function forgetTab(id) { const t = await tabSets(); if (t.own.delete(id) | t.extra.delete(id)) await saveTabSets(t); }
+
+// The agent's main tab to reuse: the last one it used if the agent opened it, else any tab it opened.
+async function mainTab() {
+  const [tabs, t] = await Promise.all([agentTabs(), tabSets()]);
+  const mine = tabs.filter((x) => t.own.has(x.id) && !t.extra.has(x.id));
+  return mine.find((x) => x.id === lastTabId) || mine.at(-1) || null;
+}
+
+// End of a task: close the extra tabs (Settings → "Keep extra tabs open" turns this off).
+async function closeExtraTabs() {
+  if ((await settings()).keepTabs) return 0;
+  const [tabs, t] = await Promise.all([agentTabs(), tabSets()]);
+  const close = tabs.filter((x) => t.extra.has(x.id)).map((x) => x.id);
+  if (close.length) await chrome.tabs.remove(close).catch(() => {});
+  return close.length;
+}
 
 function waitForLoad(tabId, timeoutMs = 30_000) {
   return new Promise((resolve) => {
@@ -359,14 +426,16 @@ async function afterAction(tabId) {
   return t;
 }
 
-async function maybeConfirm(tabId, desc) {
+// Risky clicks anywhere, and every action on a watched site (webmail, payments, banks), wait for the user's OK.
+async function maybeConfirm(tabId, desc, url, action = 'click') {
   const s = await settings();
-  if (!s.confirmRisky || !RISKY.test(desc)) return;
+  const watched = await hostWatched(url);
+  if (!watched && (action !== 'click' || !s.confirmRisky || !RISKY.test(desc))) return;
   await setGroupStatus('✋');
-  const what = desc.replace(/^e\d+ /, '');
-  notify(`${s.agentName} needs your OK`, `Allow it to click ${what}?`, tabId);
+  const what = `${action} ${desc.replace(/^e\d+ /, '')}`.trim() + (watched ? ` on ${hostOf(url)}` : '');
+  notify(`${s.agentName} needs your OK`, `Allow it to ${what}?`, tabId);
   needsYou++; refreshIndicators();
-  const answer = await page(tabId, 'confirm', { message: `Allow ${s.agentName} to click ${what}?`, timeoutSec: 120 })
+  const answer = await page(tabId, 'confirm', { message: `Allow ${s.agentName} to ${what}?`, timeoutSec: 120 })
     .finally(() => { needsYou--; refreshIndicators(); });
   if (answer !== 'allow') throw new Error(`The user did not allow this action (${answer}). Ask them before trying again.`);
 }
@@ -585,16 +654,23 @@ const METHODS = {
     return { tabs: tabs.map((t) => ({ tabId: t.id, title: t.title, url: t.url, active: t.active })), text: JSON.stringify(tabs.map((t) => ({ tabId: t.id, title: t.title, url: t.url, active: t.active }))) };
   },
 
-  async tab_open({ url, why }) {
+  async tab_open({ url, why, newTab }) {
+    refuseUnsafeUrl(url);
     if (await hostBlocked(url)) throw new Error(`The user has blocked the agent on ${new URL(url).hostname}.`);
+    if (!newTab) { // one tab by default: load the page in the agent's main tab
+      const main = await mainTab();
+      if (main) return METHODS.navigate({ tabId: main.id, url, why });
+    }
     const gid = await groupId();
     let windowId;
     if (gid != null) windowId = (await chrome.tabGroups.get(gid)).windowId;
     else windowId = (await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null))?.id;
     const tab = await chrome.tabs.create({ url, active: true, ...(windowId ? { windowId } : {}) });
     await addToGroup(tab.id);
+    await rememberTab(tab.id, !!newTab && !!(await mainTab()));
     lastTabId = tab.id;
     await waitForLoad(tab.id);
+    refuseCertError(tab.id);
     pushHud();
     if (why) pageQuiet(tab.id, 'intent', { text: why });
     await readingPause();
@@ -609,6 +685,7 @@ const METHODS = {
   },
 
   async navigate({ tabId, url, why }) {
+    refuseUnsafeUrl(url);
     const tab = await resolveTab(tabId);
     if (url === 'back') await chrome.tabs.goBack(tab.id);
     else if (url === 'forward') await chrome.tabs.goForward(tab.id);
@@ -621,6 +698,7 @@ const METHODS = {
     }
     await sleep(200);
     await waitForLoad(tab.id);
+    refuseCertError(tab.id);
     pushHud();
     await readingPause();
     logActivity(tab.id, 'navigate', why || (url === 'back' || url === 'forward' ? `Went ${url}` : `Went to ${hostOf(url)}`));
@@ -668,7 +746,7 @@ const METHODS = {
         y = Math.round(y + rand(-0.5, 0.5) * Math.min(h * 0.4, 8));
       }
     } else if (x == null || y == null) throw new Error('click needs a ref or x and y');
-    await maybeConfirm(tab.id, desc);
+    await maybeConfirm(tab.id, desc, tab.url);
     await acting(tab.id, async () => {
       await pointAt(tab.id, x, y, ref, why);
       await Promise.all([pageQuiet(tab.id, 'press', { x, y }), mouseClick(tab.id, x, y, { button, clickCount: double ? 2 : 1 })]);
@@ -680,6 +758,7 @@ const METHODS = {
 
   async type({ tabId, ref, text, clear, submit, why, secret }) {
     const tab = await resolveTab(tabId);
+    await maybeConfirm(tab.id, `${secret ? 'a hidden value' : `"${text.length > 40 ? text.slice(0, 39) + '…' : text}"`}${submit ? ' and submit' : ''}`, tab.url, 'type');
     await acting(tab.id, () => typeInto(tab, { ref, text, clear, submit, why }));
     const t = submit ? await afterAction(tab.id) : null;
     logActivity(tab.id, 'type', why || (secret ? 'Typed a hidden value' : `Typed "${text.length > 40 ? text.slice(0, 39) + '…' : text}"`));
@@ -688,6 +767,7 @@ const METHODS = {
 
   async press_key({ tabId, key, why }) {
     const tab = await resolveTab(tabId);
+    await maybeConfirm(tab.id, key, tab.url, 'press');
     if (why) pageQuiet(tab.id, 'intent', { text: why });
     await acting(tab.id, () => pressKey(tab.id, key));
     const t = await afterAction(tab.id);
@@ -771,11 +851,12 @@ const METHODS = {
       pages: [...new Set(run.map((a) => hostOf(a.url || '')))].filter(Boolean) };
     const images = run.filter((a) => a.thumb).slice(-3).map((a) => ({ data: a.thumb, label: a.label }));
     hud.plan = null;
+    const closed = await closeExtraTabs();
     await setGroupStatus('✅');
     pushHud();
     const chatting = new Set(chatPorts.values()); // only the panel whose chat asked for this task
     for (const p of chatting) try { p.postMessage({ type: 'report', text, stats }); } catch {}
-    return { text: JSON.stringify({ summary: text, ...stats }), images };
+    return { text: JSON.stringify({ summary: text, ...stats, closedExtraTabs: closed }), images };
   },
 
   // Replay a recorded workflow step by step; on the first failure, hand back to the agent with context.
