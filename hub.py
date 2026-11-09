@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 import socket
 import subprocess
@@ -19,12 +20,28 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
 from . import chat, recordings
 
 log = logging.getLogger("hermes_chrome")
+
+def _plugin_version() -> str:
+    try:
+        m = re.search(r"^version:\s*(\S+)", (Path(__file__).parent / "plugin.yaml").read_text(encoding="utf-8"), re.M)
+        return m.group(1) if m else ""
+    except OSError:
+        return ""
+
+
+def version_tuple(v: str | None) -> tuple:
+    return tuple(int(x) for x in re.findall(r"\d+", v or "")[:3])
+
+
+PLUGIN_VERSION = _plugin_version()
+EXTENSION_DOWNLOAD = "https://github.com/whoisdhana/hermes-chrome/releases/latest/download/hermes-chrome-extension.zip"
 
 CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"  # no 0/O, 1/I/L
 CODE_TTL = 300
@@ -257,7 +274,7 @@ class Hub:
         if self.current not in self.conns:
             self.current = did
         log.info("hermes-chrome: browser connected: %s (%s %s)", self._name(did), msg.get("browser"), msg.get("version"))
-        await ws.send_json({"type": "welcome", "agentName": self.agent_name, "profile": self.profile})
+        await ws.send_json({"type": "welcome", "agentName": self.agent_name, "profile": self.profile, "pluginVersion": PLUGIN_VERSION})
         try:
             async for m in ws:
                 if m.type != WSMsgType.TEXT:
@@ -419,7 +436,8 @@ class Hub:
     def status(self) -> dict:
         self.ready.wait(5)
         if self.owner:
-            browsers = [{"name": self._name(d), "id": d, "chrome": c["info"].get("browser"), "default": d == self.current}
+            browsers = [{"name": self._name(d), "id": d, "chrome": c["info"].get("browser"), "extension": c["info"].get("version"),
+                         "default": d == self.current}
                         for d, c in self.conns.items() if not c["ws"].closed]
             current = self._name(self.current) if self.current in self.conns else None
             return {"connected": bool(browsers), "device": current, "browsers": browsers, "address": self.address,

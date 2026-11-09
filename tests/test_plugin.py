@@ -362,6 +362,35 @@ class PluginTest(unittest.TestCase):
         self.assertIsNone(self.ctx.hooks["pre_llm_call"](session_id="s"), "no paired browsers left: no hint")
 
 
+class UpdateNoticeTest(unittest.TestCase):
+    """The plugin tells the extension its version, and tells the agent once when a browser runs an older extension."""
+    PORT = 18795
+
+    def test_welcome_version_and_one_time_hint(self):
+        ctx = FakeCtx(tempfile.mkdtemp(), {"port": self.PORT, "advertise_host": "127.0.0.1", "agent_name": "Delulu"})
+        plugin.register(ctx)
+        hub = ctx.tools["chrome_open"].__closure__[0].cell_contents
+        self.assertTrue(wait_for(lambda: hub.owner))
+        code = next(l for l in ctx.commands["chrome"]("pair").splitlines() if l.startswith("HC-"))
+        ext = FakeExtension(self.PORT)
+        paired = ext.run(ext.pair(code))
+
+        async def hello(version):
+            ext.session = ClientSession()
+            ext.ws = await ext.session.ws_connect(f"http://127.0.0.1:{self.PORT}/ext")
+            await ext.ws.send_json({"type": "hello", "deviceId": paired["deviceId"], "deviceKey": paired["deviceKey"],
+                                    "browser": "Chrome/1", "version": version, "deviceName": "Old Chrome"})
+            return json.loads((await ext.ws.receive()).data)
+        welcome = ext.run(hello("0.0.1"))
+        self.assertEqual(welcome["pluginVersion"], hub_mod.PLUGIN_VERSION)
+        self.assertRegex(hub_mod.PLUGIN_VERSION, r"^\d+\.\d+\.\d+$")
+        time.sleep(5.1)  # past the hint's status cache
+        first = ctx.hooks["pre_llm_call"](session_id="s")
+        self.assertIn("older than this plugin", first)
+        self.assertIn(hub_mod.EXTENSION_DOWNLOAD, first)
+        self.assertNotIn("older than this plugin", ctx.hooks["pre_llm_call"](session_id="s"), "said once, not every turn")
+
+
 class TunnelTest(unittest.TestCase):
     """public_url: Hermes behind an HTTPS tunnel, so no Tailscale/LAN is needed."""
     PORT = 18797

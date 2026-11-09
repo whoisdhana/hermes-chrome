@@ -65,7 +65,10 @@ async function connect() {
   sock.onmessage = (e) => {
     let m;
     try { m = JSON.parse(e.data); } catch { return; }
-    if (m.type === 'welcome') { setBadge('on'); chrome.storage.local.set({ agentName: m.agentName || 'Hermes', pairError: '' }); }
+    if (m.type === 'welcome') {
+      const updateNote = versionNote(m.pluginVersion);
+      chrome.storage.local.set({ agentName: m.agentName || 'Hermes', pairError: '', updateNote }).then(() => setBadge('on'));
+    }
     else if (m.type === 'chat_event' || m.type === 'chat_meta') chatEvent(m);
     else if (m.type === 'skill_saved') skillSaved(m);
     else if (m.type === 'recordings' || m.type === 'recording_run') toPanels(m); // before the id check: these carry ids too
@@ -141,11 +144,30 @@ async function scheduleReconnect() {
   backoff = Math.min(backoff * 2, 30_000);
 }
 
-function setBadge(state) {
-  const map = { on: ['', '#16A34A'], off: ['off', '#78716C'], err: ['!', '#DC2626'] };
+async function setBadge(state) {
+  const map = { on: ['', '#16A34A'], off: ['off', '#78716C'], err: ['!', '#DC2626'], update: ['↑', '#2563EB'] };
+  if (state === 'on' && (await chrome.storage.local.get('updateNote')).updateNote?.kind === 'extension') state = 'update';
   const [text, color] = map[state];
   chrome.action.setBadgeText({ text });
   chrome.action.setBadgeBackgroundColor({ color });
+  chrome.action.setTitle({ title: state === 'update' ? 'Hermes Chrome: update available' : chrome.runtime.getManifest().action.default_title });
+}
+
+// The plugin tells us its version on connect. A newer plugin means a newer extension is out (they ship together);
+// an older one means the user's Hermes needs updating. Shown in the badge, side panel and Settings.
+const EXTENSION_DOWNLOAD = 'https://github.com/whoisdhana/hermes-chrome/releases/latest/download/hermes-chrome-extension.zip';
+function cmpVersion(a, b) {
+  const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0);
+  return 0;
+}
+function versionNote(pluginVersion) {
+  const mine = chrome.runtime.getManifest().version;
+  if (!pluginVersion || !/^\d+(\.\d+)*$/.test(pluginVersion)) return null;
+  const c = cmpVersion(pluginVersion, mine);
+  if (c > 0) return { kind: 'extension', latest: pluginVersion, current: mine, url: EXTENSION_DOWNLOAD };
+  if (c < 0) return { kind: 'plugin', plugin: pluginVersion, current: mine };
+  return null;
 }
 
 chrome.runtime.onStartup.addListener(connect);

@@ -11,7 +11,7 @@ from pathlib import Path
 import threading
 
 from . import recordings, telegram_note
-from .hub import CODE_TTL, Hub
+from .hub import CODE_TTL, EXTENSION_DOWNLOAD, PLUGIN_VERSION, Hub, version_tuple
 from .tools import TOOLS, make_handler
 
 HELP = """/chrome_pair      new pairing code for the Hermes Chrome extension (5 minutes, one use)
@@ -37,6 +37,7 @@ def register(ctx):
         ctx.register_tool(name=name, toolset="hermes_chrome", schema=schema, handler=make_handler(hub, name, method), emoji="🌐")
 
     cache = {"at": 0.0, "status": {}}
+    told_update = set()  # (browser id, extension version) the agent was already told about
 
     def hint(**_):
         if time.time() - cache["at"] > 5:
@@ -50,11 +51,17 @@ def register(ctx):
             else:
                 device = f' "{st["device"]}" is connected' if st.get("device") else " is connected"
             flows = recordings.names()
+            stale = [b for b in st.get("browsers") or [] if version_tuple(b.get("extension")) and PLUGIN_VERSION
+                     and version_tuple(b["extension"]) < version_tuple(PLUGIN_VERSION) and (b["id"], b["extension"]) not in told_update]
+            told_update.update((b["id"], b["extension"]) for b in stale)
+            update = (f" Tell the user once, briefly: their Hermes Chrome extension ({stale[0]['extension']}) is older than this "
+                      f"plugin ({PLUGIN_VERSION}); download {EXTENSION_DOWNLOAD}, unzip it over the old extension folder and press "
+                      "Reload in the extension's side panel (or in chrome://extensions).") if stale else ""
             return (f"[hermes-chrome] The user's own Chrome{device} (your tab group: {hub.agent_name}). For anything in a "
                     "web browser use the chrome_* tools (load them with tool_search query \"chrome\"), not the built-in browser "
                     "tools. For multi-step tasks: chrome_plan first, a short `why` on every action, chrome_report at the end. "
                     "Use chrome_handoff for CAPTCHA, login, 2FA or payment steps; never solve CAPTCHAs."
-                    + (f" Recorded workflows (run with chrome_replay): {', '.join(flows[:20])}." if flows else ""))
+                    + (f" Recorded workflows (run with chrome_replay): {', '.join(flows[:20])}." if flows else "") + update)
         if st.get("devices"):
             return f"[hermes-chrome] The user's Chrome is not connected right now. If they ask for browser work, reply: {hub.offline_message}"
         return None

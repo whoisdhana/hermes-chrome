@@ -1,8 +1,10 @@
-# Install Hermes Chrome (instructions for the Hermes agent)
+# Install or update Hermes Chrome (instructions for the Hermes agent)
 
-You are a Hermes agent. Your user asked you to install Hermes Chrome so you can use their real Chrome. Do the steps below yourself with your terminal tool, then give the user the short checklist at the end. Keep your messages short and plain. Never print, paste or ask for API keys, tokens or the contents of `.env`.
+You are a Hermes agent. Your user asked you to install or update Hermes Chrome so you can use their real Chrome. Do the steps below yourself with your terminal tool, then give the user the short checklist at the end. Keep your messages short and plain. Never print, paste or ask for API keys, tokens or the contents of `.env`.
 
 If you run as a named profile (not the default one), put `-p <your profile>` right after `hermes` in every command below.
+
+**Updating?** If Hermes Chrome is already installed and the user asked to update it: do step 1 (it updates the plugin), skip steps 2 to 4 (their settings stay), do step 5, and send the **update checklist** instead of the install checklist. Report the old and new version (`hermes plugins list` before and after).
 
 ## 1. Install or update the plugin
 
@@ -79,6 +81,16 @@ hermes gateway status
 > 3. Send me `/chrome pair` (on Telegram: `/chrome_pair`). Right-click the new Hermes Chrome icon → **Settings**, paste the code and click **Pair**. The icon turns green.
 >
 > Then just ask me to do things in your browser. I work in my own tab group, you'll see my cursor, and I'll hand over to you for logins and CAPTCHAs.
+
+### Update checklist to send the user
+
+> Hermes Chrome is updated from [old version] to [new version]. [Gateway: I'm restarting to load it, give me a minute. | Terminal chat: quit this chat with /exit and run `hermes chat` again.]
+>
+> Now update the extension in Chrome:
+> 1. Download https://github.com/whoisdhana/hermes-chrome/releases/latest/download/hermes-chrome-extension.zip and unzip it **over your current Hermes Chrome folder** (the one you loaded in `chrome://extensions`), replacing the files.
+> 2. Open the Hermes Chrome side panel and press **Reload extension** in the update banner (or press the reload icon on its card in `chrome://extensions`).
+>
+> Your pairing, settings and recordings stay. If Chrome asks to approve new permissions, accept them.
 
 ## If something goes wrong
 

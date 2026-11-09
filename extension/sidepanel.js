@@ -561,10 +561,27 @@ async function refreshStatus() {
   connected = !!now;
 }
 
+// Update notice: the extension is behind the plugin (download + reload), or the plugin is behind the extension.
+function renderUpdate(n) {
+  const box = $('update');
+  box.hidden = !n;
+  if (!n) return;
+  if (n.kind === 'extension') {
+    box.innerHTML = `<b>Hermes Chrome ${esc(n.latest)} is available</b> (you have ${esc(n.current)}). Download it, unzip it over your current extension folder, then press Reload.
+      <div class="acts"><button class="primary" type="button" data-act="download">Download</button><button class="ghost" type="button" data-act="reload">Reload extension</button></div>`;
+    box.querySelector('[data-act=download]').onclick = () => chrome.tabs.create({ url: n.url });
+    box.querySelector('[data-act=reload]').onclick = () => chrome.runtime.reload();
+  } else {
+    box.innerHTML = `<b>Your Hermes plugin is older</b> (${esc(n.plugin)}, this extension is ${esc(n.current)}). Ask your agent: "Update Hermes Chrome".`;
+  }
+}
+chrome.storage.onChanged.addListener((c, area) => { if (area === 'local' && c.updateNote) renderUpdate(c.updateNote.newValue); });
+
 (async () => {
   const s = await chrome.storage.local.get({ agentName: 'Hermes', chatLog: [], deviceKey: '', showSteps: false });
   showSteps = s.showSteps;
   agentName = s.agentName;
+  chrome.storage.local.get('updateNote').then(({ updateNote }) => renderUpdate(updateNote));
   paired = !!s.deviceKey;
   $('title').textContent = agentName;
   input.placeholder = `Ask ${agentName}…`;

@@ -3,6 +3,20 @@ const el = (id) => document.getElementById(id);
 
 let pinnedUntil = 0; // keep a pairing error on screen instead of letting the status refresh overwrite it
 
+async function renderUpdateNote() {
+  const { updateNote: n } = await chrome.storage.local.get('updateNote');
+  const box = el('updateNote');
+  box.hidden = !n;
+  if (!n) return;
+  box.className = 'bad';
+  box.innerHTML = n.kind === 'extension'
+    ? `Update available: Hermes Chrome ${n.latest} (you have ${n.current}). <a href="${n.url}" target="_blank" rel="noopener">Download</a>, unzip it over this extension's folder, then <a href="#" id="reloadExt">reload</a>.`
+    : `Your Hermes plugin (${n.plugin}) is older than this extension (${n.current}). Ask your agent: "Update Hermes Chrome".`;
+  el('reloadExt')?.addEventListener('click', (e) => { e.preventDefault(); chrome.runtime.reload(); });
+}
+renderUpdateNote();
+chrome.storage.onChanged.addListener((c, area) => { if (area === 'local' && c.updateNote) renderUpdateNote(); });
+
 async function renderPairing() {
   if (Date.now() < pinnedUntil) return;
   const s = await chrome.storage.local.get({ deviceKey: '', host: '', port: 8798, agentName: 'Hermes', pairError: '', deviceName: '' });

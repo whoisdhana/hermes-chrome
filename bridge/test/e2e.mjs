@@ -442,6 +442,27 @@ try {
     await panel.close();
     await userTab.close();
   });
+  await step('update notice: badge, side panel banner, Settings line', async () => {
+    const extId = new URL(sw.url()).host;
+    await sw.evaluate(() => chrome.storage.local.set({ updateNote: versionNote('99.0.0') }).then(() => setBadge('on')));
+    assert.equal(await sw.evaluate(() => chrome.action.getBadgeText({})), '↑');
+    const panel = await ctx.newPage();
+    await panel.goto(`chrome-extension://${extId}/sidepanel.html`);
+    await panel.waitForSelector('#update:not([hidden])');
+    assert.match(await panel.textContent('#update'), /Hermes Chrome 99\.0\.0 is available/);
+    assert.equal(await panel.$$eval('#update button', (b) => b.map((x) => x.textContent).join('|')), 'Download|Reload extension');
+    const opts = await ctx.newPage();
+    await opts.goto(`chrome-extension://${extId}/options.html`);
+    await opts.waitForSelector('#updateNote:not([hidden])');
+    assert.match(await opts.textContent('#updateNote'), /Update available: Hermes Chrome 99\.0\.0/);
+    await sw.evaluate(() => chrome.storage.local.set({ updateNote: versionNote('0.0.1') }));
+    await panel.waitForFunction(() => /plugin is older/.test(document.querySelector('#update').textContent));
+    await sw.evaluate(() => chrome.storage.local.set({ updateNote: versionNote(chrome.runtime.getManifest().version) }).then(() => setBadge('on')));
+    await panel.waitForSelector('#update', { state: 'hidden' });
+    assert.equal(await sw.evaluate(() => chrome.action.getBadgeText({})), '', 'same version: no notice');
+    await opts.close();
+    await panel.close();
+  });
   await step('side panel: model picker, / menu, attachments', async () => {
     const panel = await ctx.newPage();
     await panel.goto(`chrome-extension://${extId}/sidepanel.html`);
