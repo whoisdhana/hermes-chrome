@@ -26,7 +26,7 @@ The extension connects out to Hermes, so your laptop needs no open ports. When t
 ## Watching it work
 
 - **Plan strip**: for multi-step tasks a slim bar at the top of the page shows the plan, the current step and progress (`Delulu · Exporting the CSV · 3/5`), with pause and stop. The tab group title follows along (`⏳ Delulu 3/5`).
-- **Intent captions**: every click, keystroke and key press must carry a short reason ("Opening the date picker"). It appears next to the cursor, on approval prompts and in Activity; actions without one are refused.
+- **A reason for every action**: every click, keystroke and key press must carry a short reason ("Opening the date picker"). It appears on approval prompts, in the side panel and in Activity; actions without one are refused.
 - **Takeover**: touch the mouse or keyboard in the agent's tab and it pauses on its own ("You took over… Press ▶ when it can continue"). Pause and resume also from the strip, the side panel, or **⌥⇧.** (Alt+Shift+.).
 - **Tab marker**: the agent's tab is marked next to the address bar (a badge on the toolbar icon: ● working, II paused, ! needs you) and in the tab strip (a coloured dot on the tab's icon).
 - **Needs you**: CAPTCHAs, logins, payments and risky clicks raise a Mac notification and, when you are talking to the agent on Telegram, a message there.
@@ -120,7 +120,7 @@ plugins:
   entries:
     hermes-chrome:
       settings:
-        agent_name: Delulu                  # cursor label and tab group name (default: Hermes)
+        agent_name: Delulu                  # tab group and plan strip name (default: Hermes)
         offline_message: MacBook not available
         port: 8798                          # one port per profile if several use the plugin
         advertise_host: 100.x.y.z           # override the address put into pairing codes

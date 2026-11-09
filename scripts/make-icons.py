@@ -61,7 +61,7 @@ def main(src: str):
     for size, img in ((128, big), (48, big), (32, small), (16, small)):
         img.resize((size, size), Image.LANCZOS).save(OUT / f"icon{size}.png")
         print(OUT / f"icon{size}.png")
-    # round face crop for the cursor's name tag
+    # round face crop for the side panel avatar
     face = src_img.crop((380, 230, 780, 630)).resize((96, 96), Image.LANCZOS)
     mask = Image.new("L", (96, 96), 0)
     ImageDraw.Draw(mask).ellipse([0, 0, 95, 95], fill=255)

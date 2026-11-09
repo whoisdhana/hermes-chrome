@@ -203,7 +203,7 @@
       <div class="cursor"><svg viewBox="0 0 26 26"><path d="M3 2.5 L3 20 L8 15.5 L11.2 22.5 L14.3 21.1 L11.2 14.3 L18 14.3 Z"
         fill="#35302A" stroke="#FFFFFF" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
       <div class="plan" role="status"><div class="row"><span class="who"></span><span class="now"></span><span class="count"></span>
-        <button class="pause" type="button" title="Pause (⌥⇧.)">⏸</button><button class="stop" type="button" title="Stop this task">✕</button></div>
+        <button class="pause" type="button" aria-label="Pause">⏸</button><button class="stop" type="button" aria-label="Stop this task">✕</button></div>
         <div class="bar"><i></i></div></div>
       <div class="toast"></div>`;
     document.documentElement.appendChild(host);
@@ -323,9 +323,9 @@
     p.querySelector('.bar i').style.width = steps.length ? `${(done / steps.length) * 100}%` : '0';
     const btn = p.querySelector('.pause');
     btn.textContent = s.paused ? '▶' : '⏸';
-    btn.title = s.paused ? 'Resume (⌥⇧.)' : 'Pause (⌥⇧.)';
+    btn.setAttribute('aria-label', s.paused ? 'Resume' : 'Pause');
     btn.hidden = !!s.recording;
-    p.querySelector('.stop').title = s.recording ? 'Stop recording' : 'Stop this task';
+    p.querySelector('.stop').setAttribute('aria-label', s.recording ? 'Stop recording' : 'Stop this task');
   }
 
   function readingSweep() {
