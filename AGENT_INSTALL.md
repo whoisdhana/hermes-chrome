@@ -44,7 +44,7 @@ Work it out; ask only if you cannot tell.
 
   Do not use throwaway tunnels (`trycloudflare.com`, free ngrok): the address changes on restart and the user would have to pair again. Never open port 8798 itself to the internet.
 
-## 4. Side-panel chat (optional)
+## 4. Side-panel chat (optional, ask first)
 
 The chat inside Chrome's side panel needs this profile's API server. Check without printing values:
 
@@ -52,21 +52,27 @@ The chat inside Chrome's side panel needs this profile's API server. Check witho
 grep -cE '^API_SERVER_(ENABLED|KEY)=' "$(hermes config env-path)"
 ```
 
-`2` means it is on. Otherwise ask the user whether they want side-panel chat. Only if they say yes, add `API_SERVER_ENABLED=true` and `API_SERVER_KEY=<a new random 32-byte hex string>` to that `.env` file without showing the key in chat. Browser control from chat apps works without it.
+`2` means it is already on. Otherwise **do not turn it on yourself**: ask the user "Do you also want to chat with me from Chrome's side panel? (yes/no)" and wait. Only after an explicit yes, add `API_SERVER_ENABLED=true` and `API_SERVER_KEY=<a new random 32-byte hex string>` to that `.env` file without showing the key in chat. No answer or no: skip it. Browser control from chat apps works without it.
 
 ## 5. Restart, then pair
 
-The plugin loads when the gateway restarts, which ends your current reply. First send the user the checklist below, then restart in the background so your message gets out:
+Plugins load when a Hermes process starts, so the plugin is not active in this conversation yet. Check how you are running:
 
 ```bash
-nohup sh -c 'sleep 15; hermes gateway restart' >/dev/null 2>&1 &
+hermes gateway status
 ```
 
-If that is not possible here, ask the user to send `/restart` instead.
+- **Gateway running** (Telegram, Discord and so on): send the user the checklist below first, then restart in the background so your message gets out. If that is not possible here, ask the user to send `/restart` instead.
+
+  ```bash
+  nohup sh -c 'sleep 15; hermes gateway restart' >/dev/null 2>&1 &
+  ```
+
+- **No gateway** (the user is talking to you in `hermes chat` in a terminal): tell the user to quit this chat (`/exit`) and run `hermes chat` again. `/new` is not enough. Then send the checklist.
 
 ### Checklist to send the user (fill in the bits in brackets)
 
-> Hermes Chrome is installed. I'm restarting to load it; give me a minute.
+> Hermes Chrome is installed. [Gateway: I'm restarting to load it, give me a minute. | Terminal chat: quit this chat with /exit and run `hermes chat` again to load it.]
 >
 > 1. Download the extension: https://github.com/whoisdhana/hermes-chrome/releases/latest/download/hermes-chrome-extension.zip and unzip it.
 > 2. In Chrome open `chrome://extensions`, turn on **Developer mode** (top right), click **Load unpacked** and pick the unzipped folder.
@@ -76,7 +82,7 @@ If that is not possible here, ask the user to send `/restart` instead.
 
 ## If something goes wrong
 
-- `hermes plugins doctor hermes-chrome` checks the plugin.
+- `cd / && hermes plugins doctor hermes-chrome` checks the installed plugin (run it from `/`: in a folder that contains a `hermes-chrome` directory, doctor checks that folder instead).
 - `/chrome status` shows whether a browser is connected and the address codes point to.
 - Pairing says "Could not reach…": the user's computer cannot reach the address in the code. Recheck step 3.
 - Codes are single use and last 5 minutes; send `/chrome pair` again for a new one.
