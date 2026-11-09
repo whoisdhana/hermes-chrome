@@ -4,6 +4,8 @@ Setup for users: enable the plugin, run /chrome pair, paste the code into the ex
 """
 from __future__ import annotations
 
+import os
+import re
 import time
 from pathlib import Path
 
@@ -22,8 +24,16 @@ HELP = """/chrome_pair      new pairing code for the Hermes Chrome extension (5 
 /chrome revoke <name or id | all>   unpair a browser"""
 
 
+def profile_of(ctx) -> str:
+    """Which Hermes profile this process serves. HERMES_HOME is the ground truth (…/profiles/<name> for a named
+    profile); ctx.profile_name has been seen to say "default" inside other profiles' gateways, which made them all
+    claim the default profile's browser port."""
+    m = re.search(r"/profiles/([^/]+)/*$", os.environ.get("HERMES_HOME", ""))
+    return m.group(1) if m else (ctx.profile_name or "default")
+
+
 def register(ctx):
-    profile = ctx.profile_name
+    profile = profile_of(ctx)
     hub = Hub(
         ctx,
         port=int(ctx.get_config("port", default=None) or default_port(profile)),
@@ -32,6 +42,7 @@ def register(ctx):
         allow_lan=bool(ctx.get_config("allow_lan", default=False)),
         offline_message=ctx.get_config("offline_message", default="Browser not available"),
         agent_name=ctx.get_config("agent_name", default=None) or ("Hermes" if profile in ("default", "custom") else profile.title()),
+        profile=profile,
     )
     hub.start()
 

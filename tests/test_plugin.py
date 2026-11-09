@@ -506,6 +506,21 @@ class PortClashTest(unittest.TestCase):
         self.assertIn('in use by the Hermes profile "nora_research"', out)
         self.assertIn("settings.port", out)
 
+    def test_profile_comes_from_hermes_home(self):
+        ctx = FakeCtx(tempfile.mkdtemp(), {})
+        ctx.profile_name = "default"  # what Hermes reported inside other profiles' gateways
+        old = os.environ.get("HERMES_HOME")
+        try:
+            os.environ["HERMES_HOME"] = "/home/u/.hermes/profiles/finance"
+            self.assertEqual(plugin.profile_of(ctx), "finance")
+            os.environ["HERMES_HOME"] = "/home/u/.hermes"
+            self.assertEqual(plugin.profile_of(ctx), "default")
+        finally:
+            if old is None:
+                os.environ.pop("HERMES_HOME", None)
+            else:
+                os.environ["HERMES_HOME"] = old
+
 
 class TunnelTest(unittest.TestCase):
     """public_url: Hermes behind an HTTPS tunnel, so no Tailscale/LAN is needed."""

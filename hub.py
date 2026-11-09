@@ -129,7 +129,7 @@ def normalize_code(raw: str) -> str:
 
 class Hub:
     def __init__(self, ctx, *, port: int, advertise_host: str | None, offline_message: str, agent_name: str,
-                 public_url: str | None = None, allow_lan: bool = False):
+                 public_url: str | None = None, allow_lan: bool = False, profile: str | None = None):
         self.ctx = ctx
         self.port = port
         self.advertise_override = advertise_host
@@ -137,7 +137,7 @@ class Hub:
         self.public_url = ext_url(public_url) if public_url else None  # set: reached through a tunnel, loopback only
         self.offline_message = offline_message
         self.agent_name = agent_name
-        self.profile = ctx.profile_name
+        self.profile = profile or ctx.profile_name
         self.loop: asyncio.AbstractEventLoop | None = None
         self.owner = False
         self.advertise = "127.0.0.1"
