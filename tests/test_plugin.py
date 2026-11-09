@@ -492,18 +492,30 @@ class PortClashTest(unittest.TestCase):
         ports = {hub_mod.default_port(p) for p in ("finance", "maya", "nora_accounts", "nora_research", "vulcan")}
         self.assertEqual(len(ports), 5, "distinct per profile")
         self.assertTrue(all(8800 <= p < 9000 for p in ports))
-        owner = FakeCtx(tempfile.mkdtemp(), {"port": self.PORT, "advertise_host": "127.0.0.1"})
-        owner.profile_name = "nora_research"
+        owner = FakeCtx(tempfile.mkdtemp(), {"port": self.PORT, "advertise_host": "127.0.0.1"})  # the default profile
         plugin.register(owner)
         hub1 = owner.tools["chrome_open"].__closure__[0].cell_contents
         self.assertTrue(wait_for(lambda: hub1.owner))
-        other = FakeCtx(tempfile.mkdtemp(), {"port": self.PORT, "advertise_host": "127.0.0.1"})  # its own state and secret
-        plugin.register(other)
+        # a named profile that enabled the plugin and set the same port in its own config: its own state and secret
+        old = os.environ.get("HERMES_HOME")
+        prof = os.path.join(tempfile.mkdtemp(), "profiles", "nora_research")
+        os.makedirs(prof)
+        with open(os.path.join(prof, "config.yaml"), "w") as f:
+            f.write(f"plugins:\n  enabled:\n    - hermes-chrome\n  entries:\n    hermes-chrome:\n      settings:\n        port: {self.PORT}\n")
+        try:
+            os.environ["HERMES_HOME"] = prof
+            other = FakeCtx(tempfile.mkdtemp(), {"advertise_host": "127.0.0.1"})
+            plugin.register(other)
+        finally:
+            if old is None:
+                os.environ.pop("HERMES_HOME", None)
+            else:
+                os.environ["HERMES_HOME"] = old
         hub2 = other.tools["chrome_open"].__closure__[0].cell_contents
         self.assertTrue(hub2.ready.wait(5))
         self.assertFalse(hub2.owner)
         out = other.commands["chrome"]("pair")
-        self.assertIn('in use by the Hermes profile "nora_research"', out)
+        self.assertIn('in use by the Hermes profile "default"', out)
         self.assertIn("settings.port", out)
 
     def test_other_profiles_only_run_it_when_they_enabled_it(self):
@@ -530,6 +542,32 @@ class PortClashTest(unittest.TestCase):
                 os.environ.pop("HERMES_HOME", None)
             else:
                 os.environ["HERMES_HOME"] = old
+
+    def test_config_reader_without_yaml(self):
+        text = """model:
+  default: x
+plugins:
+  enabled:
+    - homeassistant
+    - 'hermes-chrome'
+  entries:
+    hermes-chrome:
+      settings:
+        agent_name: Delulu
+        port: 8799   # own port
+    other:
+      settings:
+        port: 1
+session_reset:
+  mode: idle
+"""
+        enabled, settings = plugin._plugins_block(text)
+        self.assertEqual(enabled, ["homeassistant", "hermes-chrome"])
+        self.assertEqual(settings.get("agent_name"), "Delulu")
+        self.assertEqual(settings.get("port"), "8799", "inline comments are dropped")
+        self.assertEqual(plugin._plugins_block("plugins:\n  enabled: []\n")[0], [])
+        self.assertEqual(plugin._plugins_block("plugins:\n  enabled: [a, hermes-chrome]\n")[0], ["a", "hermes-chrome"])
+        self.assertIsNone(plugin._plugins_block("model:\n  x: 1\n")[0])
 
     def test_profile_comes_from_hermes_home(self):
         ctx = FakeCtx(tempfile.mkdtemp(), {})

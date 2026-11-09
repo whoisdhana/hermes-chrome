@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Hermes Chrome",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "description": "Let your Hermes agent drive this Chrome: visible cursor, its own tab group, and a human handoff for CAPTCHAs and logins.",
   "minimum_chrome_version": "116",
   "permissions": ["tabs", "tabGroups", "debugger", "scripting", "storage", "alarms", "sidePanel", "contextMenus", "notifications", "favicon", "webNavigation", "nativeMessaging"],

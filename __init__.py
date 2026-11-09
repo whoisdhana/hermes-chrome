@@ -32,24 +32,55 @@ def profile_of(ctx) -> str:
     return m.group(1) if m else (ctx.profile_name or "default")
 
 
+def _plugins_block(text: str) -> tuple[list[str] | None, dict]:
+    """From a Hermes config.yaml: the `plugins.enabled` list (None if absent) and hermes-chrome's settings. A small
+    reader for just these keys, because the Python running a gateway does not always have PyYAML."""
+    enabled, settings = None, {}
+    lines = text.splitlines()
+    in_plugins = False
+    path: list[tuple[int, str]] = []  # (indent, key) under plugins:
+    for raw in lines:
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        ind = len(raw) - len(raw.lstrip(" "))
+        line = raw.strip()
+        if ind == 0:
+            in_plugins = line.startswith("plugins:")
+            path = []
+            continue
+        if not in_plugins:
+            continue
+        while path and path[-1][0] >= ind:
+            path.pop()
+        keys = [k for _, k in path]
+        if line.startswith("- "):
+            if keys == ["enabled"]:
+                enabled = (enabled or []) + [line[2:].strip().strip("'\"")]
+            continue
+        key, _, val = line.partition(":")
+        key, val = key.strip().strip("'\""), val.split(" #")[0].strip().strip("'\"")
+        if keys == [] and key == "enabled":
+            enabled = [] if val in ("", "[]") else [v.strip().strip("'\"") for v in val.strip("[]").split(",") if v.strip()]
+        if keys == ["entries", "hermes-chrome", "settings"] and val:
+            settings[key] = val
+        if not val:
+            path.append((ind, key))
+    return enabled, settings
+
+
 def own_plugin_config(profile: str) -> dict | None:
-    """For a named profile, this plugin's part of the profile's OWN config.yaml: {"enabled": bool, "settings": {...}}.
-    Hermes can load plugins installed in the main ~/.hermes into every profile and hand them the main profile's
-    settings, so a profile that never enabled Hermes Chrome would still run it on the main profile's port.
-    None for the default profile (or when the file cannot be read): then Hermes' own answers stand."""
+    """For a named profile, this plugin's part of the profile's OWN config.yaml: whether it is enabled there and its
+    settings. Hermes can load plugins installed in the main ~/.hermes into every profile and hand them the main
+    profile's settings, so a profile that never enabled Hermes Chrome would otherwise run it on the main port.
+    None for the default profile or when the file cannot be read."""
     if profile in ("default", "custom", ""):
         return None
     try:
-        import yaml
         with open(os.path.join(os.environ.get("HERMES_HOME", ""), "config.yaml"), encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-    except Exception:
+            enabled, settings = _plugins_block(f.read())
+    except OSError:
         return None
-    plugins = cfg.get("plugins") or {}
-    enabled = plugins.get("enabled")
-    entry = (plugins.get("entries") or {}).get("hermes-chrome") or {}
-    return {"enabled": isinstance(enabled, list) and "hermes-chrome" in enabled, "settings": entry.get("settings") or {},
-            "has_list": isinstance(enabled, list)}
+    return {"enabled": enabled is not None and "hermes-chrome" in enabled, "has_list": enabled is not None, "settings": settings}
 
 
 def register(ctx):
@@ -57,7 +88,9 @@ def register(ctx):
     own = own_plugin_config(profile)
     if own and own["has_list"] and not own["enabled"]:
         return  # this profile did not enable Hermes Chrome: no browser tools, no port
-    port = (own["settings"].get("port") if own else None) or (None if own else ctx.get_config("port", default=None))
+    named = profile not in ("default", "custom", "")
+    # A named profile never takes the main profile's port: only its own setting, else its own default.
+    port = (own["settings"].get("port") if own else None) or (None if named else ctx.get_config("port", default=None))
     hub = Hub(
         ctx,
         port=int(port or default_port(profile)),
