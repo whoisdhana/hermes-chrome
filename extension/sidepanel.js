@@ -600,7 +600,27 @@ function renderUpdate(n) {
         () => { getSelection().selectAllChildren(box.querySelector('.cmd code')); copy.textContent = 'Press ⌘C'; });
     });
   } else {
-    box.innerHTML = `<b>Your Hermes plugin is older</b> (${esc(n.plugin)}, this extension is ${esc(n.current)}). Ask your agent: "Update Hermes Chrome".`;
+    const head = `<b>Your Hermes plugin is older</b> (${esc(n.plugin)}, this extension is ${esc(n.current)}).`;
+    box.innerHTML = `${head} Ask your agent: "Update Hermes Chrome".`;
+    const token = box.dataset.render = String(Math.random());
+    chrome.runtime.sendMessage({ popup: 'pluginUpdateStatus' }).catch(() => ({})).then((s) => {
+      if (!s?.available || box.hidden || box.dataset.render !== token) return;
+      box.innerHTML = `${head}<div class="acts"><button class="primary" type="button" data-act="plugin">Update Hermes plugin</button></div><div class="upd-msg" hidden></div>`;
+      const btn = box.querySelector('[data-act=plugin]'), msg = box.querySelector('.upd-msg');
+      btn.onclick = async () => {
+        if (!window.confirm('Update the Hermes Chrome plugin on your Hermes machine from the official GitHub release? Hermes restarts briefly; a task in progress is interrupted.')) return;
+        btn.disabled = true;
+        btn.textContent = 'Updating Hermes…';
+        msg.hidden = true;
+        const r = await chrome.runtime.sendMessage({ popup: 'runPluginUpdate' }).catch((e) => ({ ok: false, error: e.message }));
+        if (r?.ok && r.same) { btn.textContent = `Already up to date (${r.to})`; return; }
+        if (r?.ok) { btn.textContent = `Updated to ${r.to}. Hermes is restarting…`; return; } // reconnects by itself; the banner then goes away
+        btn.disabled = false;
+        btn.textContent = 'Update Hermes plugin';
+        msg.hidden = false;
+        msg.textContent = r?.error || 'The update failed.';
+      };
+    });
   }
 }
 chrome.storage.onChanged.addListener((c, area) => { if (area === 'local' && c.updateNote) renderUpdate(c.updateNote.newValue); });

@@ -12,6 +12,27 @@ async function renderUpdateNote() {
   box.className = 'bad';
   if (n.kind !== 'extension') {
     box.textContent = `Your Hermes plugin (${n.plugin}) is older than this extension (${n.current}). Ask your agent: "Update Hermes Chrome".`;
+    const token = box.dataset.render = String(Math.random());
+    const st = await chrome.runtime.sendMessage({ popup: 'pluginUpdateStatus' }).catch(() => ({}));
+    if (!st?.available || box.dataset.render !== token) return;
+    box.textContent = `Your Hermes plugin (${n.plugin}) is older than this extension (${n.current}). `;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Update Hermes plugin';
+    const msg = document.createElement('span');
+    msg.id = 'updateMsg';
+    box.append(btn, msg);
+    btn.onclick = async () => {
+      if (!window.confirm('Update the Hermes Chrome plugin on your Hermes machine from the official GitHub release? Hermes restarts briefly; a task in progress is interrupted.')) return;
+      btn.disabled = true;
+      btn.textContent = 'Updating Hermes…';
+      msg.textContent = '';
+      const r = await chrome.runtime.sendMessage({ popup: 'runPluginUpdate' }).catch((e) => ({ ok: false, error: e.message }));
+      if (r?.ok) { btn.textContent = r.same ? `Already up to date (${r.to})` : `Updated to ${r.to}. Hermes is restarting…`; return; }
+      btn.disabled = false;
+      btn.textContent = 'Update Hermes plugin';
+      msg.textContent = r?.error || 'The update failed.';
+    };
     return;
   }
   const head = `Update available: Hermes Chrome ${n.latest} (you have ${n.current}).`;

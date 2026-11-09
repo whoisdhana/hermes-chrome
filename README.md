@@ -19,7 +19,7 @@ Setup is two steps: enable the plugin, then send `/chrome pair` and paste the co
 Install Hermes Chrome for me: read https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/AGENT_INSTALL.md and follow it.
 ```
 
-**Updating:** when a newer version is out, the extension shows an **↑** badge and an "update available" banner in its side panel. With the one-time update helper installed, press **Update now** and the extension updates and reloads itself. See [Updating](#updating).
+**Updating:** the extension shows an **↑** badge and a banner when something is out of date. If the **extension** is older, press **Update now** (after the one-time update helper, see Updating below). If the **Hermes plugin** is older, press **Update Hermes plugin**: it updates itself on your Hermes machine and restarts. You can still ask your agent: `Update Hermes Chrome: read https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/AGENT_INSTALL.md and follow it.`
 
 The extension connects out to Hermes, so your laptop needs no open ports. When the laptop is asleep or Chrome is closed, the tools return one plain message (default `Browser not available`) and the agent tells you instead of guessing.
 

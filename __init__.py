@@ -43,6 +43,7 @@ def register(ctx):
         offline_message=ctx.get_config("offline_message", default="Browser not available"),
         agent_name=ctx.get_config("agent_name", default=None) or ("Hermes" if profile in ("default", "custom") else profile.title()),
         profile=profile,
+        remote_update=bool(ctx.get_config("remote_update", default=True)),
     )
     hub.start()
 

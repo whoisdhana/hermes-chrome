@@ -115,7 +115,7 @@ class FakeExtension:
     async def _loop(self):
         async for m in self.ws:
             data = json.loads(m.data)
-            if data.get("type") in ("chat_event", "chat_meta", "skill_saved", "recordings", "recording_run", "intent_result", "set_name"):
+            if data.get("type") in ("chat_event", "chat_meta", "skill_saved", "recordings", "recording_run", "intent_result", "set_name", "plugin_update"):
                 self.events.append(data)
             elif "id" in data:
                 self.calls.append(data)
@@ -520,6 +520,51 @@ class PortClashTest(unittest.TestCase):
                 os.environ.pop("HERMES_HOME", None)
             else:
                 os.environ["HERMES_HOME"] = old
+
+
+class PluginSelfUpdateTest(unittest.TestCase):
+    """A paired browser asks the plugin to update itself; the plugin runs `hermes plugins update` and restarts."""
+    PORT = 18791
+
+    def test_update_from_browser(self):
+        ctx = FakeCtx(tempfile.mkdtemp(), {"port": self.PORT, "advertise_host": "127.0.0.1"})
+        plugin.register(ctx)
+        hub = ctx.tools["chrome_open"].__closure__[0].cell_contents
+        self.assertTrue(wait_for(lambda: hub.owner))
+        code = next(l for l in ctx.commands["chrome"]("pair").splitlines() if l.startswith("HC-"))
+        ext = FakeExtension(self.PORT)
+        p = ext.run(ext.pair(code))
+        self.assertTrue(ext.run(ext.connect(p["deviceId"], p["deviceKey"]))["pluginUpdate"])
+        ran, restarted = [], []
+        result = {"code": 0, "out": "Updated hermes-chrome"}
+
+        async def fake_run(*args, timeout=300):
+            ran.append(args)
+            return result["code"], result["out"]
+        hub._hermes_cmd = fake_run
+        hub._restart_soon = lambda: restarted.append(True)
+        orig = hub_mod._plugin_version
+        hub_mod._plugin_version = lambda: "99.0.0"
+        try:
+            def ask(i):
+                ext.run(ext.send({"type": "update_plugin", "id": i}))
+                self.assertTrue(wait_for(lambda: any(e.get("type") == "plugin_update" and e.get("id") == i for e in ext.events), 5))
+                return next(e for e in ext.events if e.get("id") == i)
+            r = ask("u1")
+            self.assertEqual((r["ok"], r["to"], r.get("same")), (True, "99.0.0", None))
+            self.assertEqual(ran[-1], ("plugins", "update", "hermes-chrome"))
+            self.assertEqual(restarted, [True], "restarts to load the new code")
+            result.update(code=1, out="network unreachable")
+            r = ask("u2")
+            self.assertFalse(r["ok"])
+            self.assertIn("network unreachable", r["error"])
+            hub.remote_update = False
+            r = ask("u3")
+            self.assertFalse(r["ok"])
+            self.assertIn("turned off", r["error"])
+            self.assertEqual(len(restarted), 1)
+        finally:
+            hub_mod._plugin_version = orig
 
 
 class TunnelTest(unittest.TestCase):

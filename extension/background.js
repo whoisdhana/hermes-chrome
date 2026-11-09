@@ -68,8 +68,10 @@ async function connect() {
     try { m = JSON.parse(e.data); } catch { return; }
     if (m.type === 'set_name' && m.name) { chrome.storage.local.set({ deviceName: String(m.name).slice(0, 60) }); return; } // renamed from chat
     if (m.type === 'intent_result') { intentWaiters.get(m.id)?.(m); intentWaiters.delete(m.id); return; }
+    if (m.type === 'plugin_update') { pluginUpdateWaiters.get(m.id)?.(m); pluginUpdateWaiters.delete(m.id); return; }
     if (m.type === 'welcome') {
       canCheck = !!m.intentCheck;
+      canUpdatePlugin = !!m.pluginUpdate;
       const updateNote = versionNote(m.pluginVersion);
       chrome.storage.local.set({ agentName: m.agentName || 'Hermes', pairError: '', updateNote }).then(() => setBadge('on'));
     }
@@ -187,6 +189,20 @@ function versionNote(pluginVersion) {
 // (set when it was installed); this side cannot name a URL or a folder.
 const UPDATER = 'com.hermes_chrome.updater';
 const UPDATER_SETUP = 'curl -fsSL https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/updater/install.sh | bash';
+// "Your Hermes plugin is older": the plugin can update itself from the official repo and restart. The browser only
+// asks; the plugin decides (and can be configured to refuse), and it reconnects by itself afterwards.
+let canUpdatePlugin = false;
+const pluginUpdateWaiters = new Map();
+function updatePlugin() {
+  if (!canUpdatePlugin || ws?.readyState !== 1) return Promise.resolve({ ok: false, error: 'Hermes is not connected, or this Hermes cannot update itself from the browser.' });
+  const id = crypto.randomUUID();
+  return new Promise((resolve) => {
+    const t = setTimeout(() => { pluginUpdateWaiters.delete(id); resolve({ ok: false, error: 'No answer from Hermes within 5 minutes.' }); }, 300_000);
+    pluginUpdateWaiters.set(id, (r) => { clearTimeout(t); resolve(r); });
+    ws.send(JSON.stringify({ type: 'update_plugin', id }));
+  });
+}
+
 async function checkUpdater() {
   try {
     const r = await Promise.race([chrome.runtime.sendNativeMessage(UPDATER, { cmd: 'status' }),
@@ -246,6 +262,8 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg?.popup === 'pair') { pair(msg.code).then(sendResponse); return true; }
   if (msg?.popup === 'updaterStatus') { checkUpdater().then((r) => sendResponse({ ...r, setup: UPDATER_SETUP })); return true; }
   if (msg?.popup === 'runUpdate') { runUpdate().then(sendResponse); return true; }
+  if (msg?.popup === 'pluginUpdateStatus') { sendResponse({ available: canUpdatePlugin && ws?.readyState === 1 }); return; }
+  if (msg?.popup === 'runPluginUpdate') { updatePlugin().then(sendResponse); return true; }
   if (msg?.popup === 'unpair') {
     ws?.close();
     chrome.storage.local.set({ deviceId: '', deviceKey: '', url: '', host: '', pairError: '' }).then(() => { setBadge('off'); sendResponse({ ok: true }); });

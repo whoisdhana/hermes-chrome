@@ -20,6 +20,10 @@ Guard rails you control (extension **Settings**):
 - **Stop agent** (right-click the toolbar icon) disconnects immediately; clicking or typing in the agent's tab pauses it.
 - The agent never solves CAPTCHAs; it hands them to you.
 
+## Updating the plugin from the browser
+
+When the plugin is older than the extension, the side panel and Settings offer **Update Hermes plugin**. A paired browser can only *ask*: the plugin runs `hermes plugins update hermes-chrome` (the source it was installed from) on its own machine and then restarts its gateway. Nothing from the browser is used as a URL, path or command. Set `remote_update: false` in the plugin settings to turn this off.
+
 ## Where data lives
 
 | Data | Where | Leaves your machine? |
