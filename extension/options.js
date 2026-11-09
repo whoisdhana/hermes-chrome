@@ -6,13 +6,41 @@ let pinnedUntil = 0; // keep a pairing error on screen instead of letting the st
 async function renderUpdateNote() {
   const { updateNote: n } = await chrome.storage.local.get('updateNote');
   const box = el('updateNote');
+  box.dataset.render = '';
   box.hidden = !n;
   if (!n) return;
   box.className = 'bad';
-  box.innerHTML = n.kind === 'extension'
-    ? `Update available: Hermes Chrome ${n.latest} (you have ${n.current}). <a href="${n.url}" target="_blank" rel="noopener">Download</a>, unzip it over this extension's folder, then <a href="#" id="reloadExt">reload</a>.`
-    : `Your Hermes plugin (${n.plugin}) is older than this extension (${n.current}). Ask your agent: "Update Hermes Chrome".`;
-  el('reloadExt')?.addEventListener('click', (e) => { e.preventDefault(); chrome.runtime.reload(); });
+  if (n.kind !== 'extension') {
+    box.textContent = `Your Hermes plugin (${n.plugin}) is older than this extension (${n.current}). Ask your agent: "Update Hermes Chrome".`;
+    return;
+  }
+  const head = `Update available: Hermes Chrome ${n.latest} (you have ${n.current}).`;
+  box.textContent = head;
+  const token = box.dataset.render = String(Math.random());
+  const u = await chrome.runtime.sendMessage({ popup: 'updaterStatus' }).catch(() => ({ installed: false }));
+  if (box.dataset.render !== token) return; // re-rendered meanwhile
+  if (u?.installed) {
+    box.innerHTML = `${head} <button id="updateNow" type="button">Update now</button> <span id="updateMsg"></span>`;
+    el('updateNow').onclick = async () => {
+      const btn = el('updateNow');
+      btn.disabled = true;
+      btn.textContent = 'Updating…';
+      el('updateMsg').textContent = '';
+      const r = await chrome.runtime.sendMessage({ popup: 'runUpdate' }).catch((e) => ({ ok: false, error: e.message }));
+      if (r?.ok) { btn.textContent = `Updated to ${r.to}. Reloading…`; return; } // the extension reloads itself
+      btn.disabled = false;
+      btn.textContent = 'Update now';
+      el('updateMsg').textContent = r?.error || 'The update failed.';
+    };
+    return;
+  }
+  box.innerHTML = `${head} <a href="${n.url}" target="_blank" rel="noopener">Download</a>, unzip it over this extension's folder, then <a href="#" id="reloadExt">reload</a>.
+    <div class="setupLine">One-click updates from now on: run this once in Terminal on this computer.
+      <div class="row"><code id="setupCmd"></code><button id="copySetup" class="quiet" type="button">Copy</button></div></div>`;
+  el('setupCmd').textContent = u?.setup || '';
+  el('reloadExt').addEventListener('click', (e) => { e.preventDefault(); chrome.runtime.reload(); });
+  el('copySetup').onclick = () => navigator.clipboard.writeText(u?.setup || '').then(() => { el('copySetup').textContent = 'Copied'; },
+    () => { getSelection().selectAllChildren(el('setupCmd')); el('copySetup').textContent = 'Press ⌘C'; });
 }
 renderUpdateNote();
 chrome.storage.onChanged.addListener((c, area) => { if (area === 'local' && c.updateNote) renderUpdateNote(); });
