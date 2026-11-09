@@ -111,7 +111,7 @@ hermes plugins install whoisdhana/hermes-chrome --enable
 # or: git clone https://github.com/whoisdhana/hermes-chrome ~/.hermes/plugins/hermes-chrome && hermes plugins enable hermes-chrome
 ```
 
-Restart the gateway. The plugin listens on port 8798 on loopback and, if present, the machine's Tailscale address (else its LAN address).
+Restart the gateway. The plugin listens on port 8798 on loopback and, if present, the machine's Tailscale address (the LAN only with `allow_lan: true`).
 
 Optional settings in `config.yaml`:
 
@@ -124,6 +124,7 @@ plugins:
         offline_message: MacBook not available
         port: 8798                          # one port per profile if several use the plugin
         advertise_host: 100.x.y.z           # override the address put into pairing codes
+        allow_lan: false                    # true: also listen on the LAN address (plain ws://, trusted networks only)
 ```
 
 ### 2. Extension (on your laptop)

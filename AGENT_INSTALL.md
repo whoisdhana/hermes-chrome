@@ -32,7 +32,7 @@ Work it out; ask only if you cannot tell.
 
 - **Hermes runs on the user's own computer** (the one with Chrome): nothing to do.
 - **Tailscale is set up here** (`tailscale ip -4` prints an address) and the user's laptop is on the same tailnet: nothing to do. The plugin uses that address by itself.
-- **Same home or office network**: nothing to do. The plugin uses this machine's LAN address.
+- **Same home or office network, no Tailscale**: prefer Tailscale or the HTTPS option below. Only if the user insists on the plain LAN, set `hermes config set plugins.entries.hermes-chrome.settings.allow_lan true` and tell them anyone on that network could watch the connection.
 - **Anything else** (a VPS or cloud server, no Tailscale): it needs a public HTTPS address that forwards to `http://127.0.0.1:8798` (the port from step 2) with WebSockets on. Ask the user which they have:
   - A Cloudflare named tunnel or a domain behind Cloudflare: add an ingress rule for a hostname such as `chrome.example.com` with `path: ^/ext$` and `service: http://127.0.0.1:8798`.
   - Tailscale Funnel: `tailscale funnel --bg 8798`, the address is `https://<machine>.<tailnet>.ts.net`.
