@@ -20,6 +20,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import zlib
 from pathlib import Path
 
 from aiohttp import WSMsgType, web
@@ -34,6 +35,14 @@ def _plugin_version() -> str:
         return m.group(1) if m else ""
     except OSError:
         return ""
+
+
+def default_port(profile: str) -> int:
+    """The default profile keeps 8798; every other profile gets its own port (8800-8999) from its name, so several
+    Hermes profiles on one machine never fight over the same browser port."""
+    if profile in ("default", "custom", ""):
+        return 8798
+    return 8800 + zlib.crc32(profile.encode()) % 200
 
 
 def version_tuple(v: str | None) -> tuple:
@@ -425,7 +434,7 @@ class Hub:
         if request.remote not in ("127.0.0.1", "::1") or via_proxy(request):
             return web.Response(status=403)
         if not hmac.compare_digest(request.headers.get("X-HC-Secret", ""), self._secret()):
-            return web.Response(status=401)
+            return web.json_response({"profile": self.profile}, status=401)  # loopback only: lets a client name the clash
         body = await request.json()
         method, params = body.get("method"), body.get("params") or {}
         try:
@@ -533,6 +542,17 @@ class Hub:
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 body = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 401:  # the port belongs to another Hermes profile on this machine
+                try:
+                    other = json.loads(e.read()).get("profile") or "another profile"
+                except Exception:
+                    other = "another profile"
+                raise BrowserUnavailable(
+                    f"Browser port {self.port} is in use by the Hermes profile \"{other}\", not this one (\"{self.profile}\"). "
+                    f"Give one of them its own port, e.g. `hermes -p {self.profile} config set plugins.entries.hermes-chrome.settings.port "
+                    f"{default_port(self.profile + '-alt')}`, then restart its gateway and pair again.")
+            raise BrowserUnavailable(self.offline_message)
         except (urllib.error.URLError, OSError):
             raise BrowserUnavailable(self.offline_message)
         if "unavailable" in body:

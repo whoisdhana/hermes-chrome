@@ -10,7 +10,7 @@ from pathlib import Path
 import threading
 
 from . import recordings, telegram_note
-from .hub import CODE_TTL, EXTENSION_DOWNLOAD, PLUGIN_VERSION, Hub, version_tuple
+from .hub import CODE_TTL, EXTENSION_DOWNLOAD, PLUGIN_VERSION, Hub, default_port, version_tuple
 from .tools import TOOLS, make_handler
 
 HELP = """/chrome_pair      new pairing code for the Hermes Chrome extension (5 minutes, one use)
@@ -26,7 +26,7 @@ def register(ctx):
     profile = ctx.profile_name
     hub = Hub(
         ctx,
-        port=int(ctx.get_config("port", default=8798)),
+        port=int(ctx.get_config("port", default=None) or default_port(profile)),
         advertise_host=ctx.get_config("advertise_host", default=None) or None,
         public_url=ctx.get_config("public_url", default=None) or None,
         allow_lan=bool(ctx.get_config("allow_lan", default=False)),

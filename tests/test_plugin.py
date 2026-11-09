@@ -483,6 +483,30 @@ class DevicesTest(unittest.TestCase):
         self.assertEqual(list(ctx.state.get("devices")), [pa["deviceId"]])
 
 
+class PortClashTest(unittest.TestCase):
+    """Two Hermes profiles on one machine: each gets its own default port, and a clash is explained, not hidden."""
+    PORT = 18792
+
+    def test_default_ports_and_clash_message(self):
+        self.assertEqual(hub_mod.default_port("default"), 8798)
+        ports = {hub_mod.default_port(p) for p in ("finance", "maya", "nora_accounts", "nora_research", "vulcan")}
+        self.assertEqual(len(ports), 5, "distinct per profile")
+        self.assertTrue(all(8800 <= p < 9000 for p in ports))
+        owner = FakeCtx(tempfile.mkdtemp(), {"port": self.PORT, "advertise_host": "127.0.0.1"})
+        owner.profile_name = "nora_research"
+        plugin.register(owner)
+        hub1 = owner.tools["chrome_open"].__closure__[0].cell_contents
+        self.assertTrue(wait_for(lambda: hub1.owner))
+        other = FakeCtx(tempfile.mkdtemp(), {"port": self.PORT, "advertise_host": "127.0.0.1"})  # its own state and secret
+        plugin.register(other)
+        hub2 = other.tools["chrome_open"].__closure__[0].cell_contents
+        self.assertTrue(hub2.ready.wait(5))
+        self.assertFalse(hub2.owner)
+        out = other.commands["chrome"]("pair")
+        self.assertIn('in use by the Hermes profile "nora_research"', out)
+        self.assertIn("settings.port", out)
+
+
 class TunnelTest(unittest.TestCase):
     """public_url: Hermes behind an HTTPS tunnel, so no Tailscale/LAN is needed."""
     PORT = 18797
