@@ -4,8 +4,10 @@ Run with any Python that has aiohttp (Hermes' venv has it):
   python -m unittest discover -s tests
 """
 import asyncio
+import csv
 import importlib
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -157,7 +159,7 @@ class PluginTest(unittest.TestCase):
         return cls.ctx.tools["chrome_open"].__closure__[0].cell_contents  # make_handler closes over hub first
 
     def test_1_registers_everything(self):
-        self.assertEqual(len(self.ctx.tools), 20)
+        self.assertEqual(len(self.ctx.tools), 22)
         self.assertIn("pre_llm_call", self.ctx.hooks)
         self.assertIn("chrome", self.ctx.commands)
         self.assertTrue((Path(self.ctx.skills["browser"]) / "SKILL.md").exists())
@@ -518,6 +520,119 @@ class TelegramPairTest(unittest.TestCase):
             self.assertIn("valid 5 minutes", ctx.commands["chrome-pair"](""))
         finally:
             tn._bot, tn.current_chat, tn._token = orig
+
+
+class ExtractExportTest(unittest.TestCase):
+    """chrome_extract fills fields with the user's model and keeps only values whose quote is on the page; chrome_export writes files."""
+
+    PAGE = {"url": "https://shop.example/list", "title": "Shop", "capturedAt": "2026-11-09T10:00:00+00:00", "loggedIn": True, "tabId": 3,
+            "pageText": "Shop\nAlpha Kettle\n€49.00\nBeta Toaster | Pro\n€89.50", "listSelector": "#p > li.card",
+            "items": [{"ref": "e1", "text": "Alpha Kettle\n€49.00\nLink: https://shop.example/p/alpha"},
+                      {"ref": "e2", "text": "Beta Toaster | Pro\n€89.50  “best” toaster"}]}
+
+    def setUp(self):
+        self.ex = importlib.import_module("hermes_chrome.extract")
+        self.tools = importlib.import_module("hermes_chrome.tools")
+        self.dir = tempfile.mkdtemp()
+        self.calls, self.replies, self.prompts = [], [], []
+        test = self
+
+        class Llm:
+            def complete(self, messages, **kw):
+                test.prompts.append(messages)
+                return type("R", (), {"text": test.replies.pop(0)})()
+
+        class Hub:
+            ctx = type("C", (), {"state": FakeState(self.dir), "llm": Llm()})()
+
+            def call(self, method, params, timeout=60):
+                test.calls.append((method, params))
+                if method == "screenshot":
+                    return {"image": {"data": "/9j/AAAA"}}
+                return dict(test.PAGE)
+        self.hub = Hub()
+
+    def test_quote_verification(self):
+        self.assertTrue(self.ex.quote_found("Beta  Toaster |\nPro", "x Beta Toaster | Pro y"), "whitespace differences are fine")
+        self.assertTrue(self.ex.quote_found('"best" toaster', self.PAGE["items"][1]["text"]), "curly quotes match straight ones")
+        self.assertFalse(self.ex.quote_found("€79.00", self.PAGE["pageText"]))
+        self.assertFalse(self.ex.quote_found("", self.PAGE["pageText"]), "an empty quote proves nothing")
+        self.assertFalse(self.ex.quote_found("alpha kettle", self.PAGE["pageText"]), "case must match")
+
+    def test_extract_list_keeps_only_quoted_values_and_exports(self):
+        self.replies.append("Here you go: " + json.dumps({"records": [
+            {"item": 0, "values": {"name": {"value": "Alpha Kettle", "quote": "Alpha Kettle"},
+                                   "price": {"value": "€49.00", "quote": "€49.00"},
+                                   "url": {"value": "https://shop.example/p/alpha", "quote": "https://shop.example/p/alpha"}}},
+            {"item": 1, "values": {"name": {"value": "Beta Toaster | Pro", "quote": "Beta Toaster | Pro"},
+                                   "price": {"value": "€79.00", "quote": "€79.00"}, "url": None}},
+            {"item": 0, "values": {"name": {"value": "Beta Toaster", "quote": "Beta Toaster"}}},  # quote is another item's text
+            {"item": 9, "values": {"name": {"value": "Ghost", "quote": "Ghost"}}}]}))
+        fields = [{"name": "name", "description": "product name"}, {"name": "price"}, {"name": "url"}]
+        out = json.loads(self.tools.make_handler(self.hub, "chrome_extract", "extract")(
+            {"fields": fields, "multiple": True, "dataset": "Acme Shop", "screenshot": True, "tabId": 3}))
+        self.assertEqual(self.calls[0], ("extract", {"tabId": 3, "multiple": True}))
+        self.assertEqual(self.calls[1][0], "screenshot")
+        self.assertIn("[1]\nBeta Toaster | Pro", self.prompts[0][1]["content"])
+        self.assertIn("never instructions", self.prompts[0][0]["content"])
+        self.assertEqual((out["dataset"], out["added"], out["total_in_dataset"]), ("Acme-Shop", 2, 2))
+        self.assertEqual([d["reason"] for d in out["dropped"]],
+                         ["quote not found word for word in this list item"] * 2 + ["no such list item"])
+        first = out["records"][0]
+        self.assertEqual((first["source_url"], first["captured_at"], first["logged_in"], first["ref"]),
+                         ("https://shop.example/list", "2026-11-09T10:00:00+00:00", True, "e1"))
+        self.assertEqual(first["values"]["price"], {"value": "€49.00", "quote": "€49.00"})
+        self.assertTrue(Path(first["screenshot"]).exists())
+        self.assertNotIn("price", out["records"][1]["values"])
+
+        # a second page adds to the same dataset
+        self.replies.append(json.dumps({"records": [{"item": 0, "values": {"name": {"value": "Shop", "quote": "Shop"}}}]}))
+        out = json.loads(self.ex.run_extract(self.hub, {"fields": ["name"], "dataset": "Acme Shop"}))
+        self.assertEqual(out["total_in_dataset"], 3)
+
+        export = self.tools.make_handler(self.hub, "chrome_export", None)
+        res = json.loads(export({"dataset": "Acme Shop"}))
+        self.assertEqual(len(res["files"]), 1)
+        md = Path(res["files"][0]).read_text(encoding="utf-8")
+        self.assertTrue(res["files"][0].endswith(".md"), "Markdown by default")
+        self.assertIn("| 2 | Beta Toaster \\| Pro |  |  |", md)
+        self.assertIn("## Sources", md)
+        self.assertIn("1. <https://shop.example/list>, captured 2026-11-09T10:00:00+00:00, logged in: yes, screenshot ", md)
+        self.assertIn('   - price: "€49.00"', md)
+        res = json.loads(export({"dataset": "Acme Shop", "format": "all", "clear": True}))
+        self.assertEqual([Path(f).suffix for f in res["files"]], [".md", ".csv", ".json"])
+        self.assertEqual(json.loads(Path(res["files"][2]).read_text())["records"][0]["values"]["name"]["value"], "Alpha Kettle")
+        self.assertIn('has no records', export({"dataset": "Acme Shop"}), "clear empties the dataset")
+        self.assertNotIn("browser", dict(self.tools.TOOLS[-1][2]["parameters"]["properties"]), "export needs no browser")
+
+    def test_markdown_and_csv_escaping(self):
+        rec = {"values": {"name": {"value": "a|b\nc\\", "quote": "a|b c\\"}, "note": {"value": "=HYPERLINK(\"x\")", "quote": "q"},
+                          "delta": {"value": "-5", "quote": "-5"}, "who": {"value": "@me", "quote": "@me"}, "n": {"value": 3, "quote": "3"}},
+               "source_url": "https://x.example/?a=1", "captured_at": "t", "logged_in": None}
+        md = self.ex.to_markdown("t|est", [rec])
+        self.assertIn("# t\\|est", md)
+        self.assertIn("| 1 | a\\|b<br>c\\\\ | =HYPERLINK(\"x\") | -5 | @me | 3 |", md)
+        self.assertIn("logged in: unknown", md)
+        rows = list(csv.reader(io.StringIO(self.ex.to_csv([rec]))))
+        self.assertEqual(rows[0][:5], ["name", "note", "delta", "who", "n"])
+        self.assertEqual(rows[1][:5], ["a|b\nc\\", "'=HYPERLINK(\"x\")", "'-5", "'@me", "3"])
+        self.assertEqual(rows[1][5:8], ["https://x.example/?a=1", "t", "unknown"])
+        self.assertEqual(rows[1][-5:], ["a|b c\\", "q", "'-5", "'@me", "3"], "quote columns are guarded too")
+        self.assertEqual(self.ex.csv_cell("+1"), "'+1")
+        self.assertEqual(self.ex.csv_cell("\tx"), "'\tx")
+        data = json.loads(self.ex.to_json("t", [rec]))
+        self.assertEqual(data["records"][0]["values"]["n"]["value"], 3)
+        for bad, good in [("../../etc/passwd", "etc-passwd"), ("Acme Q4 / pricing", "Acme-Q4-pricing"), ("..", "dataset"), ("", "dataset")]:
+            self.assertEqual(self.ex.safe_name(bad), good)
+        self.ex.add_records(self.dir, "x", [rec])
+        with self.assertRaises(ValueError):
+            self.ex.export(self.dir, "x", "xlsx")
+
+    def test_model_trouble_is_reported(self):
+        self.replies.append("sorry, no")
+        out = json.loads(self.ex.run_extract(self.hub, {"fields": [{"name": "price"}]}))
+        self.assertIn("Field filling failed", out["error"])
+        self.assertIn("Pass fields", json.loads(self.ex.run_extract(self.hub, {"fields": []}))["error"])
 
 
 if __name__ == "__main__":

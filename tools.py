@@ -6,7 +6,7 @@ import json
 import time
 from pathlib import Path
 
-from . import recordings, telegram_note
+from . import extract, recordings, telegram_note
 from .hub import BrowserUnavailable
 
 TAB = {"type": "integer", "description": "Tab id from chrome_tabs / chrome_open. Omit to use the most recent agent tab."}
@@ -87,13 +87,34 @@ TOOLS = [
     ("chrome_replay", None, _schema("chrome_replay",
         "Run a browser workflow the user recorded (a skill under browser-recordings). Omit name to list them. vars fills {{placeholders}}.",
         {"name": {"type": "string"}, "vars": {"type": "object", "additionalProperties": {"type": "string"}}})),
+    ("chrome_extract", "extract", _schema("chrome_extract",
+        "Pull structured data (a row per page, or a row per list item) out of a page for research tables: competitors, prices, "
+        "products, reviews, follower counts. Pass fields; for list pages (products, reviews, search results) set multiple=true. "
+        "Every value comes back with its source URL, capture time, whether the session looked logged in, and the exact quote "
+        "from the page; values whose quote is not on the page are dropped. Records are added to a dataset; export it with chrome_export.",
+        {"tabId": TAB,
+         "fields": {"type": "array", "description": 'What to extract, e.g. [{"name": "price", "description": "listed price with currency"}].',
+                    "items": {"type": "object", "properties": {"name": {"type": "string"}, "description": {"type": "string"}}, "required": ["name"]}},
+         "multiple": {"type": "boolean", "description": "One record per repeated item (product cards, reviews, result rows) instead of one per page."},
+         "listSelectorHint": {"type": "string", "description": "CSS selector matching each list item, if the automatic list detection picks the wrong thing. Implies multiple."},
+         "maxItems": {"type": "integer", "description": "Most list items to read (default 50, max 200)."},
+         "dataset": {"type": "string", "description": 'Dataset to add the records to, e.g. "acme-competitors" (default "default"). Reuse it across pages.'},
+         "screenshot": {"type": "boolean", "description": "Also save one screenshot of the page for this run, referenced from each record."}},
+        ["fields"])),
+    ("chrome_export", None, _schema("chrome_export",
+        "Write a dataset collected with chrome_extract to a file and return its path: Markdown (default: a table plus a Sources "
+        "section with URL, time and quote per row), CSV or JSON, or all three.",
+        {"dataset": {"type": "string", "description": 'Dataset name used with chrome_extract (default "default").'},
+         "format": {"type": "string", "enum": ["md", "csv", "json", "all"], "description": "File format (default md)."},
+         "clear": {"type": "boolean", "description": "Empty the dataset after exporting it."}})),
 ]
 
 
 BROWSER = {"type": "string", "description": 'Which connected browser to use, by name (see chrome_status), e.g. "Work Chrome". '
            "Omit to use the one you used last."}
 for _name, _method, _schema_ in TOOLS:
-    _schema_["parameters"]["properties"]["browser"] = BROWSER
+    if _name != "chrome_export":  # works on saved files, not a browser
+        _schema_["parameters"]["properties"]["browser"] = BROWSER
 
 
 def make_handler(hub, tool: str, method: str | None):
@@ -108,6 +129,10 @@ def make_handler(hub, tool: str, method: str | None):
                 return json.dumps(st)
             if tool == "chrome_replay":
                 return _replay(hub, args)
+            if tool == "chrome_extract":
+                return extract.run_extract(hub, args)
+            if tool == "chrome_export":
+                return extract.run_export(hub, args)
             if tool == "chrome_handoff":  # also ping the user where they talk to the agent
                 telegram_note.notify(f"✋ {hub.agent_name} needs you in Chrome: {args.get('message', '')}")
             timeout = ((int(args.get("timeoutSec") or 600) + 15) if tool == "chrome_handoff"

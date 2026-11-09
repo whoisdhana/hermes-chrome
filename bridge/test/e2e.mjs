@@ -27,10 +27,18 @@ const PAGE = `<!doctype html><title>HC test</title>
 <button onclick="document.getElementById('out').textContent='DELETED'">Delete account</button>
 <p id="out"></p><div style="height:2000px"></div><a href="/two">Next page</a>
 <div style="position:relative;display:inline-block"><button>Covered button</button><div style="position:absolute;inset:0"></div></div></body>`;
+// A small product list for chrome_extract: short nav links (not the list), three cards, a signed-in session.
+const LIST = `<!doctype html><meta charset="utf-8"><title>Shop</title>
+<nav><a href="/">Home</a> <a href="/a">About</a> <a href="/b">Blog</a> <a href="/c">Contact</a></nav><a href="/logout">Sign out</a>
+<ul id="products">
+<li class="card"><h3>Alpha Kettle</h3><span class="price">€49.00</span> <a href="/p/alpha">View</a></li>
+<li class="card"><h3>Beta Toaster | Pro</h3><span class="price">€89.50</span><p>Rated 4.5 of 5</p></li>
+<li class="card"><h3>=Gamma Blender</h3><span class="price">€120.00</span></li>
+</ul>`;
 const pageServer = http.createServer((req, res) => {
   if (req.url === '/redir') { res.writeHead(302, { location: `http://localhost:${PAGE_PORT}/two` }); return res.end(); }
-  res.writeHead(200, { 'content-type': 'text/html' });
-  res.end(req.url === '/two' ? '<title>Two</title><h1>Page two</h1>' : PAGE);
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+  res.end(req.url === '/two' ? '<title>Two</title><h1>Page two</h1>' : req.url === '/list' ? LIST : PAGE);
 }).listen(PAGE_PORT);
 
 // HTTPS page with a self-signed certificate: Chromium shows a certificate warning for it.
@@ -208,7 +216,7 @@ try {
     const h = await fetch(`http://127.0.0.1:${PORT}/health`).then((r) => r.json());
     assert.equal(h.extension, true, 'real extension still connected');
   });
-  await step('tools/list has 20 tools', async () => assert.equal((await mcp.listTools()).tools.length, 20));
+  await step('tools/list has 22 tools', async () => assert.equal((await mcp.listTools()).tools.length, 22));
   await step('browser_status connected', async () => assert.match((await call('browser_status')).text, /"connected":true/));
 
   let tabId, outline;
@@ -273,6 +281,45 @@ try {
   await step('navigate + back', async () => {
     assert.match((await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/two` })).text, /Two/);
     assert.match((await call('navigate', { tabId, url: 'back' })).text, /HC test/);
+  });
+  await step('extract a product list; export checks quotes, escapes md, guards CSV', async () => {
+    const listUrl = `http://127.0.0.1:${PAGE_PORT}/list`;
+    await call('navigate', { tabId, url: listUrl, why: 'Opening the product list' });
+    const page = JSON.parse((await call('extract', { tabId, multiple: true })).text);
+    assert.equal(page.url, listUrl);
+    assert.equal(page.loggedIn, true, 'a Sign out link reads as logged in');
+    assert.match(page.capturedAt, /^\d{4}-\d\d-\d\dT/);
+    assert.match(page.listSelector, /li\.card$/);
+    assert.deepEqual(page.items.map((i) => i.text.split('\n')[0]), ['Alpha Kettle', 'Beta Toaster | Pro', '=Gamma Blender']);
+    assert.match(page.items[0].text, /Link: http:\/\/127\.0\.0\.1:\d+\/p\/alpha/);
+    const [a, b, c] = page.items.map((i) => i.ref);
+    const out = JSON.parse((await call('export', { name: 'shop/../test', format: 'all', records: [
+      { sourceUrl: listUrl, ref: a, values: { name: { value: 'Alpha Kettle', quote: 'Alpha Kettle' }, price: { value: '€49.00', quote: '€49.00' } } },
+      { sourceUrl: listUrl, ref: b, values: { name: { value: 'Beta Toaster | Pro', quote: 'Beta Toaster | Pro' }, price: { value: '€79.00', quote: '€79.00' } } },
+      { sourceUrl: listUrl, ref: c, values: { name: { value: '=Gamma Blender', quote: '=Gamma Blender' } } },
+      { sourceUrl: listUrl, ref: a, values: { name: { value: 'Beta Toaster', quote: 'Beta Toaster' } } }, // another item's text
+      { sourceUrl: 'https://never-read.example/', values: { name: { value: 'X', quote: 'X' } } },
+    ] })).text);
+    assert.equal(out.rows, 3);
+    assert.equal(out.dropped.length, 3, JSON.stringify(out.dropped));
+    assert.equal(out.files.length, 3);
+    for (const f of out.files) assert.equal(path.dirname(f), path.join(stateDir, 'exports'), 'file name cannot leave the exports folder');
+    const md = fs.readFileSync(out.files.find((f) => f.endsWith('.md')), 'utf8');
+    assert.match(md, /\| 2 \| Beta Toaster \\\| Pro \|  \|/);
+    assert.match(md, /## Sources/);
+    assert.match(md, /logged in: yes/);
+    assert.match(md, /- price: "€49\.00"/);
+    const csv = fs.readFileSync(out.files.find((f) => f.endsWith('.csv')), 'utf8');
+    assert.match(csv, /\n'=Gamma Blender,/);
+    assert.equal(JSON.parse(fs.readFileSync(out.files.find((f) => f.endsWith('.json')), 'utf8')).records.length, 3);
+    const single = JSON.parse((await call('extract', { tabId })).text);
+    assert.match(single.pageText, /Rated 4\.5 of 5/);
+    assert.equal(single.items, undefined);
+    const { blockedHosts } = await sw.evaluate(() => chrome.storage.local.get('blockedHosts'));
+    await sw.evaluate(() => chrome.storage.local.set({ blockedHosts: '127.0.0.1' }));
+    await assert.rejects(call('extract', { tabId }), /blocked/);
+    await sw.evaluate((v) => chrome.storage.local.set({ blockedHosts: v }), blockedHosts);
+    await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/`, why: 'Back to the test page' });
   });
   await step('press_key', async () => assert.match((await call('press_key', { tabId, key: 'Tab', why: 'Moving to the next field' })).text, /pressed Tab/));
   await step('new site: Decline, Allow once (until report), Always allow', async () => {

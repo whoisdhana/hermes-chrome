@@ -76,6 +76,8 @@ Chat uses the Hermes API server of the same profile (`API_SERVER_ENABLED=true` a
 | `chrome_eval` | Run JavaScript in the page; off unless you enable it |
 | `chrome_plan`, `chrome_report` | Plan strip and end-of-task report |
 | `chrome_replay` | Run a recorded workflow, with variables |
+| `chrome_extract` | Structured data from a page, or one record per list item (`multiple: true`). Your own model fills the fields; every value keeps its source URL, capture time, logged-in guess and the exact quote, and values whose quote is not on the page are dropped. Records collect in a named dataset |
+| `chrome_export` | Write a dataset to Markdown (default: table plus a Sources section), CSV (formula-safe) or JSON in the plugin's data folder, and return the path |
 
 The plugin also adds a one-line note to each turn while a browser is connected, so the agent reaches for these tools (they sit behind Hermes' tool search), and a bundled `browser` skill.
 
@@ -175,6 +177,8 @@ cd bridge && npm ci --omit=dev
 HC_HOST=127.0.0.1,100.x.y.z npm start     # add your Tailscale/LAN address so the extension can reach it
 npx hermes-chrome-bridge pair              # prints a pairing code
 ```
+
+The bridge has no model of its own, so its `extract` returns the raw page text or list items (with refs, URL, time and logged-in guess) and the agent fills the fields; its `export` takes those records, checks every quote against the text `extract` returned, and writes the file to `HC_STATE_DIR/exports`.
 
 Point your MCP client at `http://127.0.0.1:8798/mcp`. Variables: `HC_PORT`, `HC_AGENT_NAME`, `HC_UNAVAILABLE_MESSAGE`, `HC_STATE_DIR`, `HC_MCP_TOKEN`, `HC_MCP_ALLOW_REMOTE`, and `HC_HERMES_URL` / `HC_HERMES_KEY` for side-panel chat against a Hermes API server. A systemd unit is in [`deploy/`](deploy/hermes-chrome-bridge.service).
 
