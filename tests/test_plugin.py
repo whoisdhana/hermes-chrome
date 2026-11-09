@@ -506,6 +506,31 @@ class PortClashTest(unittest.TestCase):
         self.assertIn('in use by the Hermes profile "nora_research"', out)
         self.assertIn("settings.port", out)
 
+    def test_other_profiles_only_run_it_when_they_enabled_it(self):
+        old = os.environ.get("HERMES_HOME")
+        home = tempfile.mkdtemp()
+        prof = os.path.join(home, "profiles", "vulcan")
+        os.makedirs(prof)
+        try:
+            os.environ["HERMES_HOME"] = prof
+            with open(os.path.join(prof, "config.yaml"), "w") as f:
+                f.write("plugins:\n  enabled:\n    - homeassistant\n")
+            ctx = FakeCtx(tempfile.mkdtemp(), {"port": 8798, "agent_name": "Delulu"})  # the main profile's settings, handed down
+            plugin.register(ctx)
+            self.assertEqual(ctx.tools, {}, "not enabled in its own config: no tools, no port")
+            with open(os.path.join(prof, "config.yaml"), "w") as f:
+                f.write("plugins:\n  enabled:\n    - hermes-chrome\n")
+            ctx = FakeCtx(tempfile.mkdtemp(), {"port": 8798, "agent_name": "Delulu"})
+            plugin.register(ctx)
+            hub = ctx.tools["chrome_open"].__closure__[0].cell_contents
+            self.assertEqual(hub.port, hub_mod.default_port("vulcan"), "its own port, not the main profile's 8798")
+            self.assertEqual(hub.profile, "vulcan")
+        finally:
+            if old is None:
+                os.environ.pop("HERMES_HOME", None)
+            else:
+                os.environ["HERMES_HOME"] = old
+
     def test_profile_comes_from_hermes_home(self):
         ctx = FakeCtx(tempfile.mkdtemp(), {})
         ctx.profile_name = "default"  # what Hermes reported inside other profiles' gateways

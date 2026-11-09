@@ -32,11 +32,35 @@ def profile_of(ctx) -> str:
     return m.group(1) if m else (ctx.profile_name or "default")
 
 
+def own_plugin_config(profile: str) -> dict | None:
+    """For a named profile, this plugin's part of the profile's OWN config.yaml: {"enabled": bool, "settings": {...}}.
+    Hermes can load plugins installed in the main ~/.hermes into every profile and hand them the main profile's
+    settings, so a profile that never enabled Hermes Chrome would still run it on the main profile's port.
+    None for the default profile (or when the file cannot be read): then Hermes' own answers stand."""
+    if profile in ("default", "custom", ""):
+        return None
+    try:
+        import yaml
+        with open(os.path.join(os.environ.get("HERMES_HOME", ""), "config.yaml"), encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+    except Exception:
+        return None
+    plugins = cfg.get("plugins") or {}
+    enabled = plugins.get("enabled")
+    entry = (plugins.get("entries") or {}).get("hermes-chrome") or {}
+    return {"enabled": isinstance(enabled, list) and "hermes-chrome" in enabled, "settings": entry.get("settings") or {},
+            "has_list": isinstance(enabled, list)}
+
+
 def register(ctx):
     profile = profile_of(ctx)
+    own = own_plugin_config(profile)
+    if own and own["has_list"] and not own["enabled"]:
+        return  # this profile did not enable Hermes Chrome: no browser tools, no port
+    port = (own["settings"].get("port") if own else None) or (None if own else ctx.get_config("port", default=None))
     hub = Hub(
         ctx,
-        port=int(ctx.get_config("port", default=None) or default_port(profile)),
+        port=int(port or default_port(profile)),
         advertise_host=ctx.get_config("advertise_host", default=None) or None,
         public_url=ctx.get_config("public_url", default=None) or None,
         allow_lan=bool(ctx.get_config("allow_lan", default=False)),
