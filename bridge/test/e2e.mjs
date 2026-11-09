@@ -104,6 +104,7 @@ try {
   const options = await ctx.newPage();
   await options.goto(`chrome-extension://${extId}/options.html`);
   const pairWith = async (code) => {
+    if (await options.isHidden('#pairBox')) await options.click('#repair'); // paired: the form opens on request
     await options.fill('#code', code);
     await options.click('#pair');
     await options.waitForFunction(() => !/Pairing…/.test(document.querySelector('#pairStatus').textContent), null, { timeout: 10_000 });
@@ -136,6 +137,20 @@ try {
     assert.equal(named(), 'Work Chrome');
     for (let i = 0; i < 40 && !(await health()).extension; i++) await sleep(250);
     assert.equal(await sw.evaluate(() => chrome.storage.local.get('agentName').then((s) => s.agentName)), 'Delulu');
+    // Settings once paired: a clear status, the code form tucked away, readable actions
+    await options.waitForFunction(() => /Connected to Delulu/.test(document.querySelector('#pairStatus').textContent), null, { timeout: 10_000 });
+    assert.equal(await options.isHidden('#pairBox'), true, 'pairing form hidden while paired');
+    assert.equal(await options.isVisible('#unpair'), true);
+    assert.equal(await options.isVisible('#repair'), true);
+    await options.screenshot({ path: path.join(SHOTS, 'hc-settings-paired.png'), fullPage: true });
+    await options.click('#keepTabs');
+    assert.equal(await options.textContent('#saved'), 'Unsaved changes');
+    await options.click('#save');
+    await options.waitForFunction(() => document.querySelector('#saved').textContent === 'Saved');
+    assert.equal(await sw.evaluate(() => chrome.storage.local.get('keepTabs').then((s) => s.keepTabs)), true);
+    await options.click('#keepTabs');
+    await options.click('#save');
+    await options.waitForFunction(() => document.querySelector('#saved').textContent === 'Saved');
   });
   await step('a pairing code works only once', async () => {
     const { WebSocket } = await import('ws');

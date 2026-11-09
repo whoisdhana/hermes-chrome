@@ -17,20 +17,30 @@ async function renderUpdateNote() {
 renderUpdateNote();
 chrome.storage.onChanged.addListener((c, area) => { if (area === 'local' && c.updateNote) renderUpdateNote(); });
 
+let showPairForm = false; // paired browsers keep the code form tucked away until asked for
+
+function setStatus(kind, title, detail = '') {
+  el('statusBox').className = `status ${kind}`;
+  el('pairStatus').textContent = title;
+  el('pairDetail').textContent = detail;
+}
+
 async function renderPairing() {
   if (Date.now() < pinnedUntil) return;
   const s = await chrome.storage.local.get({ deviceKey: '', host: '', port: 8798, agentName: 'Hermes', pairError: '', deviceName: '' });
-  const as = s.deviceName ? ` as "${s.deviceName}"` : '';
   const where = s.port ? `${s.host}:${s.port}` : s.host; // tunnel pairings store the URL's host only
   const { connected } = await chrome.runtime.sendMessage({ popup: 'status' }).catch(() => ({ connected: false }));
-  const st = el('pairStatus');
-  st.className = '';
-  if (s.pairError) { st.textContent = s.pairError; st.className = 'bad'; }
-  else if (!s.deviceKey) st.textContent = 'Not paired yet.';
-  else if (connected) { st.textContent = `Paired with ${s.agentName}${as} (${where}). Connected.`; st.className = 'ok'; }
-  else st.textContent = `Paired with ${s.agentName}${as} (${where}). Waiting for Hermes…`;
-  el('unpair').hidden = !s.deviceKey;
+  const paired = !!s.deviceKey;
+  const device = s.deviceName ? ` · this browser: ${s.deviceName}` : '';
+  if (s.pairError) setStatus('bad', s.pairError);
+  else if (!paired) setStatus('', 'Not paired yet', 'Pair this browser with your Hermes agent to let it work here.');
+  else if (connected) setStatus('ok', `Connected to ${s.agentName}`, `via ${where}${device}`);
+  else setStatus('wait', `Paired with ${s.agentName}, waiting for Hermes…`, `via ${where}${device}. It reconnects on its own when Hermes is reachable.`);
+  el('pairBox').hidden = paired && !s.pairError && !showPairForm;
+  el('pairedActions').hidden = !paired;
+  el('repair').hidden = showPairForm;
 }
+el('repair').onclick = () => { showPairForm = true; renderPairing(); el('code').focus(); };
 
 // Whoever runs the server in a pairing code gets control of this browser, so say who that is before pairing.
 function pairWarning(code) {
@@ -52,14 +62,12 @@ el('pair').onclick = async () => {
   if (warning && !window.confirm(warning)) return;
   el('pair').disabled = true;
   pinnedUntil = 0;
-  el('pairStatus').className = '';
-  el('pairStatus').textContent = 'Pairing…';
+  setStatus('wait', 'Pairing…');
   const r = await chrome.runtime.sendMessage({ popup: 'pair', code });
   el('pair').disabled = false;
-  if (r?.ok) { el('code').value = ''; setTimeout(renderPairing, 1500); return renderPairing(); }
+  if (r?.ok) { el('code').value = ''; showPairForm = false; setTimeout(renderPairing, 1500); return renderPairing(); }
   pinnedUntil = Date.now() + 15_000;
-  el('pairStatus').textContent = r?.error || 'Pairing failed.';
-  el('pairStatus').className = 'bad';
+  setStatus('bad', r?.error || 'Pairing failed.');
 };
 el('code').addEventListener('keydown', (e) => { if (e.key === 'Enter') el('pair').click(); });
 
@@ -74,7 +82,12 @@ el('saveName').onclick = async () => {
   setTimeout(() => (el('saveName').textContent = 'Save name'), 1500);
 };
 el('deviceName').addEventListener('keydown', (e) => { if (e.key === 'Enter') el('saveName').click(); });
-el('unpair').onclick = async () => { await chrome.runtime.sendMessage({ popup: 'unpair' }); renderPairing(); };
+el('unpair').onclick = async () => {
+  if (!window.confirm('Unpair this browser? Your agent will no longer be able to use it until you pair again with a new code.')) return;
+  await chrome.runtime.sendMessage({ popup: 'unpair' });
+  showPairForm = false;
+  renderPairing();
+};
 
 chrome.storage.local.get(FIELDS).then((s) => {
   for (const [k, v] of Object.entries(s)) {
@@ -86,9 +99,15 @@ el('save').onclick = async () => {
   const out = {};
   for (const [k, v] of Object.entries(FIELDS)) out[k] = typeof v === 'boolean' ? el(k).checked : el(k).value.trim();
   await chrome.storage.local.set(out);
-  el('saved').textContent = 'Saved.';
-  setTimeout(() => (el('saved').textContent = ''), 2000);
+  el('saved').textContent = 'Saved';
+  el('saved').className = 'ok';
+  setTimeout(() => { if (el('saved').className === 'ok') el('saved').textContent = ''; }, 2000);
 };
+// Say so when there is something to save.
+for (const k of Object.keys(FIELDS)) el(k).addEventListener(typeof FIELDS[k] === 'boolean' || k === 'groupColor' ? 'change' : 'input', () => {
+  el('saved').textContent = 'Unsaved changes';
+  el('saved').className = '';
+});
 
 renderPairing();
 setInterval(renderPairing, 4000);

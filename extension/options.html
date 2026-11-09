@@ -15,13 +15,35 @@
     textarea { min-height: 70px; }
     .check { display: flex; gap: 8px; align-items: flex-start; font-weight: 600; }
     button { justify-self: start; font: inherit; font-weight: 700; padding: 9px 18px; border: 0; border-radius: 8px; background: #BA583D; color: #FBF1E6; cursor: pointer; }
-    button.quiet { background: #E7E5E4; }
+    button.quiet { background: #F5F2EE; color: #1C1917; box-shadow: inset 0 0 0 1px #D6D3D1; font-weight: 600; }
+    button.quiet:hover { background: #EEE9E3; }
+    button.danger { background: transparent; color: #B42318; box-shadow: inset 0 0 0 1px #F1C4BE; font-weight: 600; }
+    button.danger:hover { background: #FDF0EE; }
+    button.link { background: none; color: #BA583D; padding: 0; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+    button:disabled { opacity: .5; cursor: default; }
+    .status { display: flex; gap: 12px; align-items: flex-start; }
+    .status .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 7px; flex: none; background: #A8A29E; }
+    .status.ok .dot { background: #16A34A; box-shadow: 0 0 0 4px #DCFCE7; }
+    .status.wait .dot { background: #D97706; box-shadow: 0 0 0 4px #FEF3C7; }
+    .status.bad .dot { background: #DC2626; box-shadow: 0 0 0 4px #FEE2E2; }
+    .status b { display: block; font-size: 15px; }
+    .status small { display: block; }
+    .actions { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+    .divider { height: 1px; background: #EEEAE6; margin: 4px 0; }
     .card { border: 1px solid #E7E5E4; background: #FFF; border-radius: 12px; padding: 16px; display: grid; gap: 10px; }
     .row { display: flex; gap: 8px; }
     .row input { flex: 1; font-family: ui-monospace, Menlo, monospace; letter-spacing: .03em; }
     #pairStatus { font-weight: 600; }
     .ok { color: #16A34A; } .bad { color: #DC2626; }
-    #saved { color: #16A34A; font-weight: 600; }
+    #saved { font-weight: 600; color: #57534E; }
+    #saved.ok { color: #16A34A; }
+    .check small { display: block; margin-top: 2px; }
+    .check input { margin-top: 4px; accent-color: #BA583D; }
+    label.inline { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    label.inline select { min-width: 140px; }
+    .savebar { position: sticky; bottom: 0; display: flex; justify-content: flex-end; align-items: center; gap: 14px;
+      padding: 12px 0 16px; background: linear-gradient(to bottom, rgba(251,247,242,0), #FBF7F2 35%); }
+    .savebar button { justify-self: auto; }
   </style>
 </head>
 <body>
@@ -29,36 +51,56 @@
     <h1><img src="icons/icon128.png" alt=""> Hermes Chrome</h1>
 
     <section class="card">
-      <div id="pairStatus">Not paired</div>
+      <div class="status" id="statusBox"><span class="dot"></span><div><b id="pairStatus">Not paired</b><small id="pairDetail"></small></div></div>
       <div id="updateNote" hidden></div>
-      <label>Device name <small>How this browser shows up in /chrome devices.</small></label>
+      <div class="divider"></div>
+      <label for="deviceName">Device name <small>How this browser shows up in /chrome devices.</small></label>
       <div class="row"><input id="deviceName" type="text" maxlength="60" spellcheck="false"><button id="saveName" class="quiet" type="button">Save name</button></div>
-      <label>Pairing code <small>In Hermes, send <b>/chrome pair</b> (any chat) or run <b>hermes chrome pair</b>, then paste the code here. It looks like HC-7Q2K-9XPM@100.64.12.34:8798.</small></label>
-      <div class="row"><input id="code" type="text" autocomplete="off" spellcheck="false" placeholder="HC-XXXX-XXXX@host:port"><button id="pair" type="button">Pair</button></div>
-      <button id="unpair" class="quiet" type="button" hidden>Unpair this browser</button>
+      <div id="pairBox">
+        <label for="code">Pairing code <small>In Hermes, send <b>/chrome pair</b> (any chat) or run <b>hermes chrome pair</b>, then paste the code here. It looks like HC-7Q2K-9XPM@100.64.12.34:8798.</small></label>
+        <div class="row"><input id="code" type="text" autocomplete="off" spellcheck="false" placeholder="HC-XXXX-XXXX@host:port"><button id="pair" type="button">Pair</button></div>
+      </div>
+      <div class="actions" id="pairedActions" hidden>
+        <button id="repair" class="link" type="button">Pair with a different Hermes</button>
+        <button id="unpair" class="danger" type="button">Unpair this browser</button>
+      </div>
     </section>
 
-    <h2>Behaviour</h2>
-    <label>Tab group colour
-      <select id="groupColor">
-        <option>orange</option><option>blue</option><option>purple</option><option>green</option>
-        <option>red</option><option>yellow</option><option>cyan</option><option>pink</option><option>grey</option>
-      </select></label>
-    <label>Blocked sites <small>The agent refuses to open or act on these hosts (and their subdomains). One per line, e.g. mybank.com. Starts with password-manager vaults.</small>
-      <textarea id="blockedHosts"></textarea></label>
-    <label class="check"><input id="checkActions" type="checkbox"> <span>Check risky actions against my request <small><br>Before a risky click, a form submit or sending data to a new site, your agent's own model checks it fits what you asked. If not, you see why and decide. Needs the Hermes plugin.</small></span></label>
-    <label class="check"><input id="askNewSites" type="checkbox"> <span>Ask before acting on a new site <small><br>The agent can read any page, but its first click or keystroke on a site you have not approved asks: Decline, Allow once (this task) or Always allow.</small></span></label>
-    <label>Sites it may act on <small>Added when you press Always allow. Delete a line to take the permission back.</small>
-      <textarea id="allowedHosts"></textarea></label>
-    <label>Ask me first on these sites <small>Every click, keystroke and form submit on these hosts waits for your OK. Starts with webmail, payment apps, banks and brokers. One per line.</small>
-      <textarea id="watchHosts"></textarea></label>
-    <label class="check"><input id="humanPace" type="checkbox"> <span>Human pace <small><br>Real mouse movement, one key at a time, short pauses. Slower, but sites react as they would to you.</small></span></label>
-    <label class="check"><input id="keepTabs" type="checkbox"> <span>Keep extra tabs open after a task <small><br>The agent works in one tab and opens more only for side-by-side research. Off: it closes those extra tabs when the task ends.</small></span></label>
-    <label class="check"><input id="showSteps" type="checkbox"> <span>Show each step in chat <small><br>List every browser action in the side-panel chat. Off: one live status line while the agent works (all steps stay in Activity).</small></span></label>
-    <label class="check"><input id="confirmRisky" type="checkbox"> <span>Ask me before risky clicks <small><br>Pay, buy, delete, send, publish, post…</small></span></label>
-    <label class="check"><input id="allowEval" type="checkbox"> <span>Allow the agent to run JavaScript in pages <small><br>Powerful and risky. Leave off unless you need it.</small></span></label>
-    <button id="save" type="button">Save</button>
-    <span id="saved"></span>
+    <h2>How it works</h2>
+    <section class="card">
+      <label class="check"><input id="humanPace" type="checkbox"> <span>Human pace <small>Real mouse movement, one key at a time, short pauses. Slower, but sites react as they would to you.</small></span></label>
+      <label class="check"><input id="keepTabs" type="checkbox"> <span>Keep extra tabs open after a task <small>The agent works in one tab and opens more only for side-by-side research. Off: it closes those extra tabs when the task ends.</small></span></label>
+      <label class="check"><input id="showSteps" type="checkbox"> <span>Show each step in chat <small>List every browser action in the side-panel chat. Off: one live status line while the agent works (all steps stay in Activity).</small></span></label>
+      <label class="inline">Tab group colour
+        <select id="groupColor">
+          <option>orange</option><option>blue</option><option>purple</option><option>green</option>
+          <option>red</option><option>yellow</option><option>cyan</option><option>pink</option><option>grey</option>
+        </select></label>
+    </section>
+
+    <h2>Approvals</h2>
+    <section class="card">
+      <label class="check"><input id="confirmRisky" type="checkbox"> <span>Ask me before risky clicks <small>Pay, buy, delete, send, publish, post and similar.</small></span></label>
+      <label class="check"><input id="askNewSites" type="checkbox"> <span>Ask before acting on a new site <small>The agent can read any page, but its first click or keystroke on a site you have not approved asks: Decline, Allow once (this task) or Always allow.</small></span></label>
+      <label class="check"><input id="checkActions" type="checkbox"> <span>Check risky actions against my request <small>Before a risky click, a form submit or moving to another site, your agent's own model checks it fits what you asked. If not, you see why and decide. Needs the Hermes plugin.</small></span></label>
+    </section>
+
+    <h2>Sites</h2>
+    <section class="card">
+      <label>Blocked <small>The agent never opens or touches these sites (and their subdomains). One per line. Starts with password-manager vaults.</small>
+        <textarea id="blockedHosts" spellcheck="false"></textarea></label>
+      <label>Ask me first <small>Every click, keystroke and form submit here waits for your OK. Starts with webmail, payment apps, banks and brokers.</small>
+        <textarea id="watchHosts" spellcheck="false"></textarea></label>
+      <label>Allowed to act on <small>Added when you press Always allow. Delete a line to take the permission back.</small>
+        <textarea id="allowedHosts" spellcheck="false"></textarea></label>
+    </section>
+
+    <h2>Advanced</h2>
+    <section class="card">
+      <label class="check"><input id="allowEval" type="checkbox"> <span>Allow the agent to run JavaScript in pages <small>Powerful and risky. Leave off unless you need it. Never allowed on "Ask me first" sites.</small></span></label>
+    </section>
+
+    <div class="savebar"><span id="saved"></span><button id="save" type="button">Save changes</button></div>
   </main>
   <script src="options.js"></script>
 </body>
