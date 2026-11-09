@@ -69,7 +69,9 @@ JUDGE_PROMPT = (
 
 CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"  # no 0/O, 1/I/L
 CODE_TTL = 300
-MAX_PAIR_FAILURES = 5
+MAX_PAIR_FAILURES = 5     # wrong codes within PAIR_WINDOW ...
+PAIR_WINDOW = 15 * 60     # ... pause pairing (and cancel open codes) for PAIR_LOCKOUT
+PAIR_LOCKOUT = 5 * 60
 MAX_MESSAGE = 40 * 1024 * 1024
 
 
@@ -152,7 +154,8 @@ class Hub:
         self.pending: dict[int, tuple[asyncio.Future, str]] = {}
         self.seq = 0
         self.codes: dict[str, float] = {}
-        self.pair_failures = 0
+        self.pair_failures: list[float] = []  # times of recent wrong codes
+        self.pair_locked_until = 0.0
         self.chats: dict[str, asyncio.Task] = {}
         self.ready = threading.Event()  # set once the first bind attempt has finished
         self.request = ("", 0.0)  # the user's latest message (text, time), for action checks
@@ -227,14 +230,22 @@ class Hub:
         self.codes[code] = now + CODE_TTL  # minting a code does not reset the wrong-guess counter
         return f"HC-{code[:4]}-{code[4:]}@{self.address}"
 
-    def _redeem(self, raw: str, device_name: str) -> dict | None:
+    def _redeem(self, raw: str, device_name: str) -> dict | str:
+        """Device credentials, or the reason pairing failed (said to the person, so it must tell them what to do)."""
+        now = time.time()
+        if now < self.pair_locked_until:
+            return f"Too many wrong codes. Pairing is paused for {int(self.pair_locked_until - now) // 60 + 1} more minute(s); then send /chrome pair for a new code."
         code = normalize_code(raw)
         exp = self.codes.pop(code, None)
-        if not exp or exp < time.time():
-            self.pair_failures += 1
-            if self.pair_failures >= MAX_PAIR_FAILURES:
-                self.codes.clear()  # too many wrong guesses: every outstanding code dies
-            return None
+        if not exp or exp < now:
+            self.pair_failures = [t for t in self.pair_failures if now - t < PAIR_WINDOW] + [now]
+            if len(self.pair_failures) >= MAX_PAIR_FAILURES:  # someone may be guessing: stop for a while, cancel open codes
+                self.codes.clear()
+                self.pair_failures = []
+                self.pair_locked_until = now + PAIR_LOCKOUT
+                return "Too many wrong codes. Pairing is paused for 5 minutes; then send /chrome pair for a new code."
+            return "That code is wrong, already used, or older than 5 minutes. Send /chrome pair and paste the new code."
+        self.pair_failures = []
         device_id = secrets.token_hex(6)
         key = secrets.token_urlsafe(32)
         devices = self._devices()
@@ -333,11 +344,12 @@ class Hub:
             msg = {}
         if msg.get("type") == "pair":
             res = self._redeem(msg.get("code", ""), msg.get("deviceName", ""))
-            if res:
+            if isinstance(res, dict):
                 await ws.send_json({"type": "paired", **res, "agentName": self.agent_name})
                 log.info("hermes-chrome: paired a new browser (%s)", msg.get("deviceName"))
             else:
-                await ws.send_json({"type": "pair_failed", "reason": "Code is wrong or expired. Run /chrome pair again."})
+                log.info("hermes-chrome: pairing refused: %s", res)
+                await ws.send_json({"type": "pair_failed", "reason": res})
             await ws.close(code=1000)
             return ws
         if msg.get("type") != "hello" or not self._check_device(msg.get("deviceId"), msg.get("deviceKey")):

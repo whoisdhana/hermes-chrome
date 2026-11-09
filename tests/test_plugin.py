@@ -592,6 +592,34 @@ class PluginSelfUpdateTest(unittest.TestCase):
             hub_mod._plugin_version = orig
 
 
+class PairingLimitTest(unittest.TestCase):
+    """Wrong codes: a few mistakes never spoil a good code; five in a row pause pairing with a clear message."""
+    PORT = 18790
+
+    def test_mistakes_then_lockout(self):
+        ctx = FakeCtx(tempfile.mkdtemp(), {"port": self.PORT, "advertise_host": "127.0.0.1"})
+        plugin.register(ctx)
+        hub = ctx.tools["chrome_open"].__closure__[0].cell_contents
+        self.assertTrue(wait_for(lambda: hub.owner))
+        ext = FakeExtension(self.PORT)
+        new = lambda: next(l for l in ctx.commands["chrome"]("pair").splitlines() if l.startswith("HC-"))
+        good = new()
+        for _ in range(4):
+            r = ext.run(ext.pair("HC-2222-2222"))
+            self.assertEqual(r["type"], "pair_failed")
+            self.assertIn("Send /chrome pair", r["reason"])
+        self.assertEqual(ext.run(ext.pair(good))["type"], "paired", "four mistakes do not spoil a good code")
+        for _ in range(4):
+            ext.run(ext.pair("HC-2222-2222"))
+        self.assertEqual(ext.run(ext.pair(new()))["type"], "paired", "a success resets the count")
+        for _ in range(5):
+            r = ext.run(ext.pair("HC-2222-2222"))
+        self.assertIn("paused for 5 minutes", r["reason"])
+        r = ext.run(ext.pair(new()))
+        self.assertEqual(r["type"], "pair_failed")
+        self.assertIn("paused", r["reason"])
+
+
 class TunnelTest(unittest.TestCase):
     """public_url: Hermes behind an HTTPS tunnel, so no Tailscale/LAN is needed."""
     PORT = 18797
