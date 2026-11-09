@@ -128,7 +128,7 @@ chmod 755 "$WRAPPER"
 chmod 644 "$INSTALL_DIR/hermes_chrome_updater.py"
 echo "Installed the helper in $INSTALL_DIR"
 
-# Config (id -> folder) and one host manifest per browser, allowed for exactly the ids found there.
+# Config (id -> folder) and the host registration in every installed browser's folder.
 "$PY" -I - "$FOUND" "$INSTALL_DIR" "$WRAPPER" "$HOST_NAME" "${BROWSERS[@]}" <<'PYEOF'
 import json, os, sys
 found_file, install_dir, wrapper, host_name, *browsers = sys.argv[1:]
@@ -145,19 +145,20 @@ with open(os.path.join(install_dir, "config.json"), "w", encoding="utf-8") as f:
     json.dump(config, f, indent=2)
 for ext_id, folder in sorted(config["extensions"].items()):
     print("Extension %s -> %s" % (ext_id, folder))
-for browser, ids in sorted(per_browser.items()):
-    hosts = os.path.join(roots[browser], "NativeMessagingHosts")
-    os.makedirs(hosts, exist_ok=True)
-    manifest = {"name": host_name, "description": "Hermes Chrome update helper", "path": wrapper, "type": "stdio",
-                "allowed_origins": ["chrome-extension://%s/" % i for i in sorted(ids)]}
-    path = os.path.join(hosts, host_name + ".json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2)
-    print("%s: registered %s" % (browser, path))
-# Browsers that no longer have the extension keep no stale registration.
-for browser, root in roots.items():
+# Every installed Chromium-family browser's folder gets the same registration, allowed for every copy found.
+# Browsers do not always read only their own folder (Brave on macOS has been seen to use Google Chrome's or
+# Chromium's), so a copy in one browser must be allowed wherever that browser might look.
+all_ids = sorted(config["extensions"])
+manifest = {"name": host_name, "description": "Hermes Chrome update helper", "path": wrapper, "type": "stdio",
+            "allowed_origins": ["chrome-extension://%s/" % i for i in all_ids]}
+for browser, root in sorted(roots.items()):
     path = os.path.join(root, "NativeMessagingHosts", host_name + ".json")
-    if browser not in per_browser and os.path.isfile(path):
+    if all_ids and (os.path.isdir(root) or browser in per_browser):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+        print("%s: registered %s" % (browser, path))
+    elif os.path.isfile(path):
         os.remove(path)
         print("%s: removed old registration %s" % (browser, path))
 PYEOF

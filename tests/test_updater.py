@@ -269,7 +269,7 @@ class Installer(unittest.TestCase):
         })
         self.prefs(self.chrome / "Profile 3" / "Preferences", {EXT_ID: {"location": 4, "path": str(self.ext_a)}})
         self.prefs(self.brave / "Profile 1" / "Secure Preferences", {OTHER_ID: {"location": 4, "path": str(self.ext_b)}})
-        self.edge.mkdir(parents=True)  # installed browser without the extension: nothing registered
+        self.edge.mkdir(parents=True)  # installed browser without the extension: registered too (shared folders)
         self.env = {**{k: v for k, v in os.environ.items() if k != "XDG_CONFIG_HOME"}, "HOME": str(self.home)}
 
     def tearDown(self):
@@ -299,12 +299,14 @@ class Installer(unittest.TestCase):
         inst = self.home / ".hermes-chrome-updater"
         config = json.loads((inst / "config.json").read_text())
         self.assertEqual(config, {"extensions": {EXT_ID: os.path.realpath(self.ext_a), OTHER_ID: os.path.realpath(self.ext_b)}})
-        chrome, brave = self.host_manifest(self.chrome), self.host_manifest(self.brave)
-        self.assertEqual(chrome["allowed_origins"], [f"chrome-extension://{EXT_ID}/"])
-        self.assertEqual(brave["allowed_origins"], [f"chrome-extension://{OTHER_ID}/"])
+        chrome, brave, edge = self.host_manifest(self.chrome), self.host_manifest(self.brave), self.host_manifest(self.edge)
+        both = sorted([f"chrome-extension://{EXT_ID}/", f"chrome-extension://{OTHER_ID}/"])
+        # every installed browser's folder allows every copy: Brave on macOS has been seen reading Chrome's folder
+        self.assertEqual(sorted(chrome["allowed_origins"]), both)
+        self.assertEqual(sorted(brave["allowed_origins"]), both)
+        self.assertEqual(sorted(edge["allowed_origins"]), both)
         self.assertEqual(chrome["name"], "com.hermes_chrome.updater")
         self.assertEqual(chrome["type"], "stdio")
-        self.assertFalse((self.edge / "NativeMessagingHosts").exists())
         self.assertIn("git checkout", out)
         wrapper = Path(chrome["path"])
         self.assertEqual(wrapper, inst / "hermes-chrome-updater")
@@ -324,6 +326,7 @@ class Installer(unittest.TestCase):
         self.assertFalse(inst.exists())
         self.assertFalse((self.chrome / "NativeMessagingHosts" / "com.hermes_chrome.updater.json").exists())
         self.assertFalse((self.brave / "NativeMessagingHosts" / "com.hermes_chrome.updater.json").exists())
+        self.assertFalse((self.edge / "NativeMessagingHosts" / "com.hermes_chrome.updater.json").exists())
 
     def test_explicit_dir_and_id(self):
         self.install("--dir", str(self.ext_b), "--id", EXT_ID)
