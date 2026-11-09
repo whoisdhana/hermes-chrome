@@ -591,6 +591,7 @@ function renderUpdate(n) {
       }
       box.innerHTML = `${head} Download it, unzip it over your current extension folder, then press Reload.
         <div class="acts"><button class="primary" type="button" data-act="download">Download</button><button class="ghost" type="button" data-act="reload">Reload extension</button></div>
+        ${u?.error ? `<div class="upd-msg">The update helper could not be used: ${esc(u.error)}</div>` : ''}
         <div class="setup">One-click updates from now on: run this once in Terminal on this computer.
           <div class="cmd"><code>${esc(u?.setup || '')}</code><button class="ghost" type="button" data-act="copy">Copy</button></div></div>`;
       box.querySelector('[data-act=download]').onclick = () => chrome.tabs.create({ url: n.url });

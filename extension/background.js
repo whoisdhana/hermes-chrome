@@ -208,7 +208,10 @@ async function checkUpdater() {
     const r = await Promise.race([chrome.runtime.sendNativeMessage(UPDATER, { cmd: 'status' }),
       new Promise((_, no) => setTimeout(() => no(new Error('The update helper did not answer.')), 10_000))]);
     return r?.installed && !r.error ? r : { installed: false, error: r?.error || '' };
-  } catch (e) { return { installed: false, error: '' }; } // not installed, or not allowed for this extension id
+  } catch (e) { // not installed, not registered for this copy's id, or the browser refused to start it: say which
+    const why = String(e?.message || e);
+    return { installed: false, error: /not found/i.test(why) ? '' : why };
+  }
 }
 async function runUpdate() {
   let r;
