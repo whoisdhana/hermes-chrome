@@ -192,8 +192,8 @@ try {
     assert.match(outline, /button "Continue"/);
   });
   await step('type + click (trusted input)', async () => {
-    await call('type', { tabId, ref: refOf(outline, /textbox "Full name"/), text: 'Ada Lovelace' });
-    await call('click', { tabId, ref: refOf(outline, /button "Continue"/) });
+    await call('type', { tabId, ref: refOf(outline, /textbox "Full name"/), text: 'Ada Lovelace', why: 'Entering your name' });
+    await call('click', { tabId, ref: refOf(outline, /button "Continue"/), why: 'Moving to the next page' });
     const p = ctx.pages().find((pg) => pg.url().startsWith(`http://127.0.0.1:${PAGE_PORT}`));
     await p.screenshot({ path: path.join(SHOTS, 'hc-after-click.png') });
     assert.match((await call('get_text', { tabId })).text, /Hello Ada Lovelace/);
@@ -201,7 +201,7 @@ try {
   await step('find', async () => assert.match((await call('find', { tabId, query: 'delete' })).text, /Delete account/));
   await step('risky click asks; Enter = Deny', async () => {
     const p = ctx.pages().find((pg) => pg.url().startsWith(`http://127.0.0.1:${PAGE_PORT}`));
-    const pending = call('click', { tabId, ref: refOf(outline, /Delete account/) }).then(() => 'resolved', (e) => e.message);
+    const pending = call('click', { tabId, ref: refOf(outline, /Delete account/), why: 'Deleting the test account' }).then(() => 'resolved', (e) => e.message);
     await sleep(1500);
     await p.screenshot({ path: path.join(SHOTS, 'hc-confirm.png') });
     await p.keyboard.press('Enter');
@@ -215,11 +215,11 @@ try {
     assert.match(starter.watchHosts, /mail\.google\.com/, 'starter watch list installed');
     await sw.evaluate(() => chrome.storage.local.set({ watchHosts: '127.0.0.1' }));
     const ref = refOf(outline, /textbox "Full name"/);
-    let pending = call('type', { tabId, ref, text: 'Watched', clear: true }).then(() => 'resolved', (e) => e.message);
+    let pending = call('type', { tabId, ref, text: 'Watched', clear: true, why: 'Entering the name' }).then(() => 'resolved', (e) => e.message);
     await sleep(1500);
     await p.keyboard.press('Enter'); // Deny has focus
     assert.match(await pending, /did not allow/);
-    pending = call('press_key', { tabId, key: 'Tab' }).then(() => 'resolved', (e) => e.message);
+    pending = call('press_key', { tabId, key: 'Tab', why: 'Moving to the next field' }).then(() => 'resolved', (e) => e.message);
     await sleep(1500);
     await p.keyboard.press('Tab'); // focus moves from Deny to Allow
     await p.keyboard.press('Enter');
@@ -243,7 +243,12 @@ try {
     assert.match((await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/two` })).text, /Two/);
     assert.match((await call('navigate', { tabId, url: 'back' })).text, /HC test/);
   });
-  await step('press_key', async () => assert.match((await call('press_key', { tabId, key: 'Tab' })).text, /pressed Tab/));
+  await step('press_key', async () => assert.match((await call('press_key', { tabId, key: 'Tab', why: 'Moving to the next field' })).text, /pressed Tab/));
+  await step('click, type and key without a real why are refused', async () => {
+    for (const why of [undefined, '', 'click', 'Next']) {
+      await assert.rejects(call('press_key', { tabId, key: 'Tab', ...(why === undefined ? {} : { why }) }), /why/i, String(why));
+    }
+  });
   await step('eval_js disabled by default', async () => {
     await assert.rejects(call('eval_js', { tabId, expression: '1+1' }), /disabled/);
   });

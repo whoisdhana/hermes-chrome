@@ -12,6 +12,8 @@ from .hub import BrowserUnavailable
 TAB = {"type": "integer", "description": "Tab id from chrome_tabs / chrome_open. Omit to use the most recent agent tab."}
 REF = {"type": "string", "description": 'Element ref from chrome_read_page or chrome_find, e.g. "e12".'}
 WHY = {"type": "string", "description": 'Short reason shown to the user next to the cursor, e.g. "Opening the export menu". Always include it.'}
+WHY_REQUIRED = {"type": "string", "description": 'Required. What this step is for, in the user\'s terms, e.g. "Opening the export menu". '
+                "Shown next to the cursor, on approval prompts and in the Activity log."}
 
 
 def _schema(name, description, props=None, required=None):
@@ -46,13 +48,13 @@ TOOLS = [
     ("chrome_click", "click", _schema("chrome_click",
         "Click an element by ref (or viewport x,y). Risky clicks (pay, delete, send, post) ask the user in the browser first.",
         {"tabId": TAB, "ref": REF, "x": {"type": "number"}, "y": {"type": "number"},
-         "double": {"type": "boolean"}, "button": {"type": "string", "enum": ["left", "right", "middle"]}, "why": WHY})),
+         "double": {"type": "boolean"}, "button": {"type": "string", "enum": ["left", "right", "middle"]}, "why": WHY_REQUIRED}, ["why"])),
     ("chrome_type", "type", _schema("chrome_type",
         "Type text, optionally into an element by ref (clicked first). clear=true empties it first; submit=true presses Enter after.",
-        {"tabId": TAB, "ref": REF, "text": {"type": "string"}, "clear": {"type": "boolean"}, "submit": {"type": "boolean"}, "why": WHY}, ["text"])),
+        {"tabId": TAB, "ref": REF, "text": {"type": "string"}, "clear": {"type": "boolean"}, "submit": {"type": "boolean"}, "why": WHY_REQUIRED}, ["text", "why"])),
     ("chrome_key", "press_key", _schema("chrome_key",
         'Press a key or chord, e.g. "Enter", "Tab", "Escape", "ArrowDown", "Control+a".',
-        {"tabId": TAB, "key": {"type": "string"}, "why": WHY}, ["key"])),
+        {"tabId": TAB, "key": {"type": "string"}, "why": WHY_REQUIRED}, ["key", "why"])),
     ("chrome_scroll", "scroll", _schema("chrome_scroll", "Scroll the page, or scroll an element (ref) into view.",
         {"tabId": TAB, "ref": REF, "direction": {"type": "string", "enum": ["up", "down", "left", "right"]},
          "amount": {"type": "number"}, "why": WHY})),

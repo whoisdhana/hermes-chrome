@@ -270,6 +270,7 @@ async function replay({ name, vars = {} }) {
 const tabId = z.number().int().optional().describe('Tab id from tabs_list/tab_open. Omit to use the most recent agent tab.');
 const ref = z.string().optional().describe('Element ref from read_page or find, e.g. "e12".');
 const why = z.string().optional().describe('Short reason shown to the user next to the cursor, e.g. "Opening the export menu".');
+const whyRequired = z.string().describe('Required. What this step is for, in the user\'s terms, e.g. "Opening the export menu". Shown next to the cursor, on approval prompts and in the Activity log.');
 
 export const TOOLS = [
   ['browser_status', 'Check whether the browser is connected and list the agent tabs. Call this first; if it reports unavailable, tell the user and stop.', {}],
@@ -282,9 +283,9 @@ export const TOOLS = [
   ['find', 'Find elements whose text, label, placeholder or role matches the query. Returns refs.', { tabId, query: z.string() }],
   ['get_text', 'Visible text of the page (truncated).', { tabId, maxChars: z.number().int().optional() }],
   ['screenshot', 'Screenshot of the visible part of the tab.', { tabId }],
-  ['click', 'Click an element by ref, or viewport coordinates x,y. The on-screen cursor animates to the target first.', { tabId, ref, x: z.number().optional(), y: z.number().optional(), double: z.boolean().optional(), button: z.enum(['left', 'right', 'middle']).optional(), why }],
-  ['type', 'Type text, optionally into an element by ref (it is clicked first). clear=true empties the field first; submit=true presses Enter after.', { tabId, ref, text: z.string(), clear: z.boolean().optional(), submit: z.boolean().optional(), why }],
-  ['press_key', 'Press a key or chord, e.g. "Enter", "Tab", "Escape", "ArrowDown", "Control+a", "Meta+a".', { tabId, key: z.string(), why }],
+  ['click', 'Click an element by ref, or viewport coordinates x,y. The on-screen cursor animates to the target first.', { tabId, ref, x: z.number().optional(), y: z.number().optional(), double: z.boolean().optional(), button: z.enum(['left', 'right', 'middle']).optional(), why: whyRequired }],
+  ['type', 'Type text, optionally into an element by ref (it is clicked first). clear=true empties the field first; submit=true presses Enter after.', { tabId, ref, text: z.string(), clear: z.boolean().optional(), submit: z.boolean().optional(), why: whyRequired }],
+  ['press_key', 'Press a key or chord, e.g. "Enter", "Tab", "Escape", "ArrowDown", "Control+a", "Meta+a".', { tabId, key: z.string(), why: whyRequired }],
   ['scroll', 'Scroll the page (or the element by ref into view).', { tabId, ref, direction: z.enum(['up', 'down', 'left', 'right']).optional(), amount: z.number().optional(), why }],
   ['wait', 'Wait for a number of milliseconds (max 15000), e.g. after an action that loads content.', { tabId, ms: z.number().int() }],
   ['handoff', 'Ask the human to do something in the page (CAPTCHA, login, 2FA, payment confirmation). Shows a banner in the tab and waits until they click Done or the timeout passes. Never try to solve CAPTCHAs yourself.', { tabId, message: z.string(), timeoutSec: z.number().int().optional() }],

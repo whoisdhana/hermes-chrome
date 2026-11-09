@@ -1108,10 +1108,23 @@ function skillSaved(m) {
 // ------------------------------------------------------------ dispatch
 let busy = 0;
 let idleTimer = null;
+// Every action that changes a page carries a short reason: it is the caption next to the cursor, the label on an
+// approval prompt and the Activity entry, so the user can always see why the agent did something.
+const NEEDS_WHY = new Set(['click', 'type', 'press_key']);
+const VAGUE_WHY = /^(click(ing)?|typ(e|ing)|press(ing)?( a| the)?( key)?|action|next( step)?|continue|doing it|ok|done|step|n\/a|none)\.?$/i;
+function missingWhy(method, params) {
+  if (!NEEDS_WHY.has(method)) return null;
+  const why = String(params?.why || '').trim();
+  if (why.length >= 4 && !VAGUE_WHY.test(why)) return null;
+  return `${method} needs a short "why" saying what this step is for, in the user's terms (e.g. "Opening the export menu", "Entering the delivery address"). Add it and try again.`;
+}
+
 async function handle({ id, method, params }) {
   const reply = (body) => ws?.readyState === 1 && ws.send(JSON.stringify({ id, ...body }));
   if (!METHODS[method]) return reply({ error: `Unknown method ${method}` });
   if (Date.now() < haltUntil) return reply({ error: 'The user pressed Stop. Do not continue; wait for new instructions.' });
+  const whyErr = missingWhy(method, params);
+  if (whyErr) return reply({ error: whyErr });
   busy++;
   clearTimeout(idleTimer);
   markActive();
