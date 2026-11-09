@@ -1,4 +1,4 @@
-const FIELDS = { groupColor: 'orange', blockedHosts: '', confirmRisky: true, allowEval: false, humanPace: true };
+const FIELDS = { groupColor: 'orange', blockedHosts: '', confirmRisky: true, allowEval: false, humanPace: true, showSteps: false };
 const el = (id) => document.getElementById(id);
 
 let pinnedUntil = 0; // keep a pairing error on screen instead of letting the status refresh overwrite it

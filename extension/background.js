@@ -353,7 +353,9 @@ async function maybeConfirm(tabId, desc) {
   await setGroupStatus('✋');
   const what = desc.replace(/^e\d+ /, '');
   notify(`${s.agentName} needs your OK`, `Allow it to click ${what}?`, tabId);
-  const answer = await page(tabId, 'confirm', { message: `Allow ${s.agentName} to click ${what}?`, timeoutSec: 120 });
+  needsYou++; refreshIndicators();
+  const answer = await page(tabId, 'confirm', { message: `Allow ${s.agentName} to click ${what}?`, timeoutSec: 120 })
+    .finally(() => { needsYou--; refreshIndicators(); });
   if (answer !== 'allow') throw new Error(`The user did not allow this action (${answer}). Ask them before trying again.`);
 }
 
@@ -373,9 +375,76 @@ async function pushHud() {
   const tabs = new Set([lastTabId, rec?.tabId].filter((t) => t != null));
   for (const tabId of tabs) pageQuiet(tabId, 'hud', { ...hud, recording: hud.recording && tabId === rec?.tabId });
   for (const p of panelPorts) try { p.postMessage({ type: 'hud', hud }); } catch {}
+  refreshIndicators();
 }
 
-function markActive() { activeUntil = Date.now() + 8000; setTimeout(pushHud, 8100); }
+function markActive() { activeUntil = Date.now() + 8000; ownedUntil = Date.now() + 60_000; setTimeout(pushHud, 8100); setTimeout(() => refreshIndicators(), 60_100); }
+
+// ------------------------------------------------------------ "Delulu is on this tab" markers
+// Extensions cannot touch the address bar, so the agent's current tab is marked right next to it
+// (a per-tab badge on the toolbar icon) and in the tab strip (a dot on the tab's favicon).
+let ownedUntil = 0;
+let needsYou = 0;          // >0 while a handoff or approval is waiting for the human
+let marked = null;         // {tabId, state} currently drawn
+const MARK = {
+  working: { badge: '●', color: '#BA583D', title: (n) => `${n} is working in this tab` },
+  paused: { badge: 'II', color: '#8A7E73', title: (n) => `${n} is paused in this tab` },
+  needs: { badge: '!', color: '#DC2626', title: (n) => `${n} needs you in this tab` },
+};
+const faviconCache = new Map(); // `${pageUrl}|${state}` -> data URL
+
+async function faviconWithDot(pageUrl, color) {
+  const c = new OffscreenCanvas(32, 32), g = c.getContext('2d');
+  try { // the browser's own favicon cache (needs the "favicon" permission); same origin, so the canvas stays readable
+    const r = await fetch(chrome.runtime.getURL(`/_favicon/?pageUrl=${encodeURIComponent(pageUrl)}&size=32`));
+    g.drawImage(await createImageBitmap(await r.blob()), 0, 0, 32, 32);
+  } catch {}
+  g.beginPath(); g.arc(24, 24, 8.5, 0, Math.PI * 2); g.fillStyle = '#FFFFFF'; g.fill();
+  g.beginPath(); g.arc(24, 24, 6.5, 0, Math.PI * 2); g.fillStyle = color; g.fill();
+  const buf = new Uint8Array(await (await c.convertToBlob({ type: 'image/png' })).arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  return `data:image/png;base64,${btoa(bin)}`;
+}
+
+async function drawMark(tabId, state) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab) return;
+  const { agentName } = await settings();
+  const m = MARK[state];
+  chrome.action.setBadgeText({ tabId, text: m.badge });
+  chrome.action.setBadgeBackgroundColor({ tabId, color: m.color });
+  chrome.action.setTitle({ tabId, title: m.title(agentName) });
+  if (/^https?:/.test(tab.url || '')) {
+    const key = `${tab.url}|${state}`;
+    if (!faviconCache.has(key)) faviconCache.set(key, await faviconWithDot(tab.url, m.color));
+    if (faviconCache.size > 50) faviconCache.delete(faviconCache.keys().next().value);
+    pageQuiet(tabId, 'favicon', { dataUrl: faviconCache.get(key) });
+  }
+}
+
+function clearMark(tabId) {
+  chrome.action.setBadgeText({ tabId, text: null }).catch(() => {}); // null = back to the global connection badge
+  chrome.action.setTitle({ tabId, title: chrome.runtime.getManifest().action.default_title }).catch(() => {});
+  pageQuiet(tabId, 'favicon', { dataUrl: null });
+}
+
+// Updates run one at a time so overlapping calls cannot leave a stale badge or dot behind.
+// redrawTabId: draw that tab's mark again even if unchanged (its page reloaded and lost the favicon).
+let indicatorQueue = Promise.resolve();
+function refreshIndicators(redrawTabId) {
+  indicatorQueue = indicatorQueue.then(() => applyIndicators(redrawTabId)).catch(() => {});
+  return indicatorQueue;
+}
+
+async function applyIndicators(redrawTabId) {
+  if (redrawTabId != null && marked?.tabId === redrawTabId) marked = null;
+  const on = lastTabId != null && (needsYou > 0 || hud.paused || Date.now() < ownedUntil);
+  const want = on ? { tabId: lastTabId, state: needsYou > 0 ? 'needs' : hud.paused ? 'paused' : 'working' } : null;
+  if (marked && (!want || marked.tabId !== want.tabId)) clearMark(marked.tabId);
+  if (want && (!marked || marked.tabId !== want.tabId || marked.state !== want.state)) await drawMark(want.tabId, want.state);
+  marked = want;
+}
 
 let pauseTimer = null;
 async function pause(reason) {
@@ -646,10 +715,15 @@ const METHODS = {
     notify(`${s.agentName} needs you`, `${message} (${hostOf(tab.url)})`, tab.id);
     logActivity(tab.id, 'handoff', `Asked you: ${message}`);
     let status;
+    needsYou++;
+    refreshIndicators();
     try {
       status = await page(tab.id, 'handoff', { message, timeoutSec });
     } catch {
       status = 'page-changed';
+    } finally {
+      needsYou--;
+      refreshIndicators();
     }
     const t = await chrome.tabs.get(tab.id);
     const note = { done: 'The user says they are done.', skipped: 'The user skipped this step.', timeout: 'No response before the timeout.', 'page-changed': 'The page navigated while waiting (the user probably completed the step).' }[status];
@@ -798,9 +872,21 @@ async function conversationId(fresh = false) {
   return chatConversation;
 }
 
+// Pages Chrome itself protects from every extension (no reading, clicking or screenshots).
+const PROTECTED = /^https:\/\/(chromewebstore\.google\.com|chrome\.google\.com\/webstore|microsoftedge\.microsoft\.com\/addons)/;
+
+async function shareBlocker() { // why the active tab cannot be shared, or null
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab) return 'There is no tab to share.';
+  if (!/^https?:/.test(tab.url || '')) return 'This tab is a browser page (settings, extensions, new tab or the Web Store), which extensions cannot use. Open a website and ask again.';
+  if (PROTECTED.test(tab.url)) return 'Chrome does not let any extension read or control the Web Store, so this tab was not shared. Open a website and ask again.';
+  if (await hostBlocked(tab.url)) return `${hostOf(tab.url)} is on your Blocked sites list, so it was not shared.`;
+  return null;
+}
+
 async function adoptActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!tab || !/^https?:/.test(tab.url || '') || await hostBlocked(tab.url)) return null;
+  if (!tab || !/^https?:/.test(tab.url || '') || PROTECTED.test(tab.url) || await hostBlocked(tab.url)) return null;
   await addToGroup(tab.id);
   lastTabId = tab.id;
   return tab;
@@ -842,6 +928,7 @@ chrome.runtime.onConnect.addListener((port) => {
     if (ws?.readyState !== 1) { port.postMessage({ type: 'chat_event', chatId, kind: 'error', message: 'Not connected to Hermes. Right-click the toolbar icon → Settings.' }); return; }
     haltUntil = 0;
     const tab = msg.useTab ? await adoptActiveTab() : null;
+    if (msg.useTab && !tab) port.postMessage({ type: 'chat_event', chatId, kind: 'notice', message: await shareBlocker() || 'This tab could not be shared.' });
     const context = [
       `[Sent from the Hermes Chrome side panel. Do browser work only with the Hermes Chrome tools (chrome_* from the hermes-chrome plugin, or the hermes_chrome MCP tools; load them with tool_search "chrome"), never the built-in browser tools.`,
       `This is the user's browser "${(await settings()).deviceName || defaultDeviceName()}": use it (pass that as browser to the chrome_* tools).`,
@@ -912,7 +999,10 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
       toPanels({ type: 'rec', steps: rec.steps, recording: true });
     }
     if (info.status === 'complete') { pageQuiet(tabId, 'record', { on: true }); pushHud(); }
-  } else if (tabId === lastTabId && info.status === 'complete') pushHud(); // re-draw the plan strip after navigation
+  } else if (tabId === lastTabId && info.status === 'complete') { // re-draw the plan strip and the tab marker after navigation
+    refreshIndicators(tabId);
+    pushHud();
+  }
 });
 
 const pendingSaves = new Map(); // save id -> port

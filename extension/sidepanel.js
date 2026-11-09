@@ -9,6 +9,7 @@ let running = null;        // chatId of the turn in progress
 let liveText = null;       // element receiving streamed assistant text
 let working = null;        // "working…" indicator
 let agentName = 'Hermes';
+let showSteps = false;     // tool calls as lines in the chat (Settings); off = only the live status line
 let attachments = [];      // {kind: 'image'|'file', name, dataUrl?, mime?, data?}
 let skills = [];
 let menuItems = [], menuSel = 0;
@@ -77,22 +78,33 @@ function record(role, text) {
 const note = (text) => { add('note', text); record('note', text); };
 
 let paired = true;
+const AVATAR = chrome.runtime.getURL('icons/avatar.png');
+const SUGGESTIONS = ['Summarise this page', 'Fill in this form for me', 'Find the cheapest option here'];
 function emptyState() {
+  const mark = `<div class="mark"><img src="${AVATAR}" alt=""></div>`;
   if (!paired) {
-    log.innerHTML = `<div class="empty">Not paired yet.<br><br>Send <b>/chrome pair</b> to your agent, then right-click the Hermes Chrome icon → <b>Settings</b> and paste the code.</div>`;
+    log.innerHTML = `<div class="empty">${mark}<h2>Pair this browser</h2><p>Send /chrome pair to your agent, then right-click the Hermes Chrome icon, open Settings and paste the code.</p></div>`;
     return;
   }
-  log.innerHTML = `<div class="empty">Ask ${esc(agentName)} to do something here: "fill this form with my details", "compare prices on this page", "summarise this article".<br><br>Type <b>/</b> for commands and skills. Drop files or paste images to attach them.</div>`;
+  log.innerHTML = `<div class="empty">${mark}<h2>Ask ${esc(agentName)} to work in this tab</h2>
+    <p>Type / for commands and skills. Drop files or paste images to attach them.</p>
+    <div class="suggest">${SUGGESTIONS.map((t) => `<button type="button">${esc(t)}</button>`).join('')}</div></div>`;
+  for (const b of log.querySelectorAll('.suggest button')) b.onclick = () => { input.value = b.textContent; autosize(); refreshSend(); input.focus(); };
 }
+
+// Send button: dimmed until there is something to send; a stop square while the agent works.
+function refreshSend() { send.classList.toggle('idle', !running && !input.value.trim() && !attachments.length); }
 
 function setRunning(chatId) {
   running = chatId;
-  send.textContent = chatId ? 'Stop' : 'Send';
+  $('sendLabel').textContent = chatId ? 'Stop' : 'Send';
+  send.title = chatId ? 'Stop' : 'Send';
   send.classList.toggle('stop', !!chatId);
+  refreshSend();
   if (chatId && !working) {
     working = document.createElement('div');
     working.className = 'working';
-    working.innerHTML = `<i></i><i></i><i></i><span>${esc(agentName)} is working…</span>`;
+    working.innerHTML = `<span class="ring"><img src="${AVATAR}" alt=""></span><span class="now">${esc(agentName)} is working…</span>`;
     log.appendChild(working);
     log.scrollTop = log.scrollHeight;
   }
@@ -144,7 +156,11 @@ async function renderActivity() {
   view.insertAdjacentHTML('beforeend', '<button class="quietbtn" id="clearAct" type="button">Clear timeline</button>');
   $('clearAct').onclick = async () => { await chrome.storage.local.set({ activity: [] }); renderActivity(); };
 }
-chrome.storage.onChanged.addListener((c, area) => { if (area === 'local' && c.activity && !$('activity').hidden) renderActivity(); });
+chrome.storage.onChanged.addListener((c, area) => {
+  if (area !== 'local') return;
+  if (c.activity && !$('activity').hidden) renderActivity();
+  if (c.showSteps) showSteps = !!c.showSteps.newValue; // applies from the next step; no need to reopen the panel
+});
 
 // ------------------------------------------------------------ teach mode
 let teach = { state: 'idle', steps: [] }; // idle | recording | review | saved
@@ -287,9 +303,13 @@ port.onMessage.addListener((m) => {
     case 'tool': {
       if (liveText) { record('assistant', liveText.dataset.raw); liveText = null; }
       const line = toolLine(m.name, m.args);
-      add('tool', line); record('tool', line);
+      if (showSteps) { add('tool', line); record('tool', line); }
+      else if (working) working.querySelector('.now').textContent = `${agentName} · ${line.replace(/^\S+\s/, '')}…`; // live status only
       break;
     }
+    case 'notice':
+      if (m.message) note(m.message);
+      break;
     case 'commentary':
       if (m.text.trim()) note(m.text);
       break;
@@ -317,13 +337,15 @@ function applyMeta(m) {
   chrome.storage.local.get({ chatModel: '' }).then(({ chatModel }) => {
     const want = keep || chatModel;
     if ([...modelSel.options].some((o) => o.value === want)) modelSel.value = want;
+    modelLabel();
   });
   if (m.chatAvailable === false) note('Chat is not set up on the Hermes side: enable the Hermes API server (API_SERVER_ENABLED=true and API_SERVER_KEY in .env), then restart the gateway.');
 }
-modelSel.onchange = () => {
-  chrome.storage.local.set({ chatModel: modelSel.value });
-  note(`Model: ${modelSel.value ? modelSel.value.split('::')[1] : 'default'}`);
-};
+function modelLabel() {
+  const o = modelSel.selectedOptions[0];
+  $('modelLabel').textContent = !o ? 'Default model' : modelSel.value ? o.textContent : (o.textContent.match(/\((.+)\)/)?.[1] || 'Default model');
+}
+modelSel.onchange = () => { chrome.storage.local.set({ chatModel: modelSel.value }); modelLabel(); };
 function chosenModel() {
   if (!modelSel.value) return {};
   const [provider, model] = modelSel.value.split('::');
@@ -336,6 +358,7 @@ function addAttachment(a) {
   renderAttachments();
 }
 function renderAttachments() {
+  refreshSend();
   atts.innerHTML = '';
   attachments.forEach((a, i) => {
     const chip = document.createElement('div');
@@ -366,9 +389,14 @@ async function addFiles(files) {
     else addAttachment({ kind: 'file', name: f.name, mime: f.type || 'application/octet-stream', data: dataUrl.split(',')[1] || '' });
   }
 }
-$('attach').onclick = () => $('file').click();
+const plusMenu = $('plusMenu');
+$('plusBtn').onclick = (e) => { e.stopPropagation(); plusMenu.hidden = !plusMenu.hidden; menu.hidden = true; };
+document.addEventListener('click', (e) => { if (!plusMenu.contains(e.target)) plusMenu.hidden = true; });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') plusMenu.hidden = true; });
+$('cmds').onclick = () => { plusMenu.hidden = true; input.value = '/'; input.focus(); menuSel = 0; updateMenu(); };
+$('attach').onclick = () => { plusMenu.hidden = true; $('file').click(); };
 $('file').onchange = (e) => { addFiles([...e.target.files]); e.target.value = ''; }; // copy first: clearing empties the live FileList
-$('shot').onclick = () => port.postMessage({ type: 'capture' });
+$('shot').onclick = () => { plusMenu.hidden = true; port.postMessage({ type: 'capture' }); };
 input.addEventListener('paste', (e) => { if (e.clipboardData?.files?.length) { e.preventDefault(); addFiles(e.clipboardData.files); } });
 const composer = $('composer');
 document.addEventListener('dragover', (e) => { e.preventDefault(); composer.classList.add('drop'); });
@@ -431,7 +459,7 @@ function runCommand(name, args) {
       if (!opt) return note(`No model matches "${args.trim()}". Try /models.`);
       modelSel.value = opt.value;
       modelSel.onchange();
-      return;
+      return note(`Model: ${modelSel.value ? modelSel.value.split('::')[1] : 'default'}`);
     }
     case 'help':
       return note(`Commands:\n${COMMANDS.map(([n, d]) => `/${n}  ${d}`).join('\n')}\nSkills: type / and a few letters.`);
@@ -459,6 +487,7 @@ function submit() {
   const text = input.value.trim();
   input.value = '';
   autosize();
+  refreshSend();
   menu.hidden = true;
   const cmd = text.match(/^\/(\S+)\s*([\s\S]*)$/);
   if (cmd) return runCommand(cmd[1], cmd[2]);
@@ -478,7 +507,7 @@ input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
 });
 function autosize() { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; }
-input.addEventListener('input', () => { autosize(); menuSel = 0; updateMenu(); });
+input.addEventListener('input', () => { autosize(); refreshSend(); menuSel = 0; updateMenu(); });
 
 function newChat() {
   if (running) port.postMessage({ type: 'stop' });
@@ -501,14 +530,15 @@ async function refreshStatus() {
 }
 
 (async () => {
-  const s = await chrome.storage.local.get({ agentName: 'Hermes', chatLog: [], deviceKey: '' });
+  const s = await chrome.storage.local.get({ agentName: 'Hermes', chatLog: [], deviceKey: '', showSteps: false });
+  showSteps = s.showSteps;
   agentName = s.agentName;
   paired = !!s.deviceKey;
   $('title').textContent = agentName;
-  input.placeholder = `Ask ${agentName}… (/ for commands)`;
+  input.placeholder = `Ask ${agentName}…`;
   entries = s.chatLog;
   if (!entries.length) emptyState();
-  for (const e of entries) add(e.role, e.text);
+  for (const e of entries) if (showSteps || e.role !== 'tool') add(e.role, e.text);
   refreshStatus();
   port.postMessage({ type: "hud" });
   setInterval(refreshStatus, 5000);

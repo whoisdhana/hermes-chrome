@@ -222,6 +222,10 @@ try {
     await pending;
     const titles = await sw.evaluate(() => chrome.tabGroups.query({}).then((g) => g.map((x) => x.title)));
     assert.ok(titles.some((t) => /Delulu 2\/3/.test(t)), `group titles: ${titles}`);
+    // the agent's tab is marked next to the address bar (toolbar badge) and in the tab strip (favicon dot)
+    assert.equal(await sw.evaluate((id) => chrome.action.getBadgeText({ tabId: id }), tabId), '●');
+    await testPage().waitForSelector('link[data-hermes-chrome]', { state: 'attached', timeout: 5000 });
+    assert.match(await testPage().getAttribute('link[data-hermes-chrome]', 'href'), /^data:image\/png;base64,/);
   });
   await step('takeover pauses the agent; resume continues', async () => {
     const p = testPage();
@@ -233,6 +237,8 @@ try {
     await p.mouse.click(600, 500); // a real click is
     for (let i = 0; i < 20 && !(await sw.evaluate(() => hud.paused)); i++) await sleep(100);
     assert.equal(await sw.evaluate(() => hud.paused), true, 'paused after takeover');
+    for (let i = 0; i < 20 && (await sw.evaluate((id) => chrome.action.getBadgeText({ tabId: id }), tabId)) !== 'II'; i++) await sleep(100);
+    assert.equal(await sw.evaluate((id) => chrome.action.getBadgeText({ tabId: id }), tabId), 'II', 'paused marker');
     const t0 = Date.now();
     const pending = call('press_key', { tabId, key: 'Tab', why: 'Next field' });
     await sleep(800);
@@ -303,8 +309,8 @@ try {
     await panel.keyboard.press('Enter');
     await panel.waitForSelector('.assistant strong', { timeout: 10_000 });
     assert.equal(await panel.textContent('.assistant'), 'Hello from mock');
-    assert.match(await panel.textContent('.tool'), /Read the page/);
-    assert.match(await panel.textContent('.note'), /Checking the page/);
+    assert.equal(await panel.$$eval('.tool', (t) => t.length), 0, 'tool calls stay out of the chat by default');
+    assert.ok((await panel.$$eval('.note', (n) => n.map((x) => x.textContent))).some((x) => /Checking the page/.test(x)));
     assert.equal(await panel.textContent('#send'), 'Send');
     const req = hermesRequests.at(-1);
     assert.equal(req.auth, 'Bearer mock-key');

@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Hermes Chrome",
-  "version": "0.4.0",
+  "version": "0.4.2",
   "description": "Let your Hermes agent drive this Chrome: visible cursor, its own tab group, and a human handoff for CAPTCHAs and logins.",
   "minimum_chrome_version": "116",
-  "permissions": ["tabs", "tabGroups", "debugger", "scripting", "storage", "alarms", "sidePanel", "contextMenus", "notifications"],
+  "permissions": ["tabs", "tabGroups", "debugger", "scripting", "storage", "alarms", "sidePanel", "contextMenus", "notifications", "favicon"],
   "web_accessible_resources": [{ "resources": ["icons/avatar.png"], "matches": ["<all_urls>"] }],
   "commands": {
     "toggle-pause": { "suggested_key": { "default": "Alt+Shift+Period" }, "description": "Pause or resume the agent" }

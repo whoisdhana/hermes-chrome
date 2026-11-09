@@ -491,6 +491,17 @@
     },
 
     intent({ text }) { overlay(); showIntent(text); },
+
+    // Mark the tab in the tab strip: a favicon with a status dot (null restores the page's own icon).
+    favicon({ dataUrl }) {
+      document.querySelectorAll('link[data-hermes-chrome]').forEach((l) => l.remove());
+      if (!dataUrl) return;
+      const link = document.createElement('link');
+      link.rel = 'icon';
+      link.href = dataUrl;
+      link.dataset.hermesChrome = '1';
+      document.head?.appendChild(link);
+    },
     hud(state) { overlay(); renderHud(state); watching = !!state.active && !state.paused && !state.recording; if (!watching) tookOver = false; },
     acting({ on }) { actingDepth = Math.max(0, actingDepth + (on ? 1 : -1)); acting = actingDepth > 0; }, // nested/overlapping actions
     resetTakeover() { tookOver = false; },
