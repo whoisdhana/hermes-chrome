@@ -468,6 +468,16 @@ class TunnelTest(unittest.TestCase):
                 async with s.request("POST" if path == "/rpc" else "GET", f"http://127.0.0.1:{self.PORT}{path}", headers=headers,
                                      json={"method": "__status"} if path == "/rpc" else None) as r:
                     return r.status
+        async def from_page():
+            async with ClientSession() as cs:
+                try:
+                    async with cs.ws_connect(f"http://127.0.0.1:{self.PORT}/ext", origin="https://evil.example"):
+                        return "opened"
+                except Exception as e:
+                    return getattr(e, "status", str(e))
+        self.assertEqual(run_async(from_page()), 403, "a web page cannot open the extension socket")
+        self.assertEqual(hub_mod.detect_host(None, allow_lan=False) in ("127.0.0.1",) or hub_mod.detect_host(None).startswith("100."), True,
+                         "without allow_lan the plugin never listens on a LAN address (Tailscale is fine)")
         secret = {"X-HC-Secret": ctx.state.get("rpc_secret")}
         self.assertEqual(run_async(get("/rpc", secret)), 200)
         for h in ({"Cf-Connecting-Ip": "203.0.113.5"}, {"X-Forwarded-For": "203.0.113.5"}):

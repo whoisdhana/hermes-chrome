@@ -63,8 +63,11 @@ class BrowserUnavailable(Exception):
     pass
 
 
-def detect_host(override: str | None) -> str:
-    """Address the extension should dial: explicit setting, else Tailscale, else primary LAN IP."""
+def detect_host(override: str | None, allow_lan: bool = False) -> str:
+    """Address the extension should dial: explicit setting, else Tailscale, else (only with allow_lan) the LAN IP.
+
+    The extension talks plain ws:// on these addresses. Tailscale encrypts the link; a shared LAN does not, so
+    anyone on it could read the device key. LAN is therefore opt-in; use public_url (wss://) or Tailscale instead."""
     if override:
         return override
     try:
@@ -74,6 +77,8 @@ def detect_host(override: str | None) -> str:
             return ip
     except Exception:
         pass
+    if not allow_lan:
+        return "127.0.0.1"
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("10.255.255.255", 1))  # no packet is sent; just picks the outbound interface
@@ -114,10 +119,11 @@ def normalize_code(raw: str) -> str:
 
 class Hub:
     def __init__(self, ctx, *, port: int, advertise_host: str | None, offline_message: str, agent_name: str,
-                 public_url: str | None = None):
+                 public_url: str | None = None, allow_lan: bool = False):
         self.ctx = ctx
         self.port = port
         self.advertise_override = advertise_host
+        self.allow_lan = allow_lan
         self.public_url = ext_url(public_url) if public_url else None  # set: reached through a tunnel, loopback only
         self.offline_message = offline_message
         self.agent_name = agent_name
@@ -174,7 +180,7 @@ class Hub:
         if self.public_url:  # the tunnel connects on loopback; open no LAN/Tailscale listener
             log.info("hermes-chrome: listening on 127.0.0.1:%s for %s (profile %s)", self.port, self.public_url, self.profile)
             return
-        self.advertise = detect_host(self.advertise_override)
+        self.advertise = detect_host(self.advertise_override, self.allow_lan)
         if self.advertise != "127.0.0.1":
             try:
                 await web.TCPSite(runner, self.advertise, self.port).start()
@@ -254,14 +260,18 @@ class Hub:
     async def _health(self, request):
         if via_proxy(request):
             return web.Response(status=403)
-        return web.json_response({"ok": True, "profile": self.profile, "extension": self.connected})
+        return web.json_response({"ok": True})
 
     async def _ext(self, request):
+        origin = request.headers.get("Origin", "")
+        if origin and not origin.startswith("chrome-extension://"):  # a web page, never the extension
+            return web.Response(status=403)
         ws = web.WebSocketResponse(heartbeat=30, max_msg_size=MAX_MESSAGE)
         await ws.prepare(request)
         try:
             first = await asyncio.wait_for(ws.receive(), 5)
-            msg = json.loads(first.data) if first.type == WSMsgType.TEXT else {}
+            too_big = first.type == WSMsgType.TEXT and len(first.data) > 16 * 1024  # before auth, frames are tiny
+            msg = json.loads(first.data) if first.type == WSMsgType.TEXT and not too_big else {}
         except Exception:
             msg = {}
         if msg.get("type") == "pair":

@@ -71,7 +71,8 @@ const bridge = spawn(process.execPath, [path.resolve(here, '../src/server.mjs')]
     HC_STATE_DIR: stateDir, HC_HERMES_URL: `http://127.0.0.1:${HERMES_PORT}`, HC_HERMES_KEY: 'mock-key' },
   stdio: ['ignore', 'inherit', 'inherit'],
 });
-const newCode = () => fetch(`http://127.0.0.1:${PORT}/pair`, { method: 'POST' }).then((r) => r.json()).then((j) => j.code);
+const pairSecret = () => fs.readFileSync(path.join(stateDir, 'pair-secret'), 'utf8').trim();
+const newCode = () => fetch(`http://127.0.0.1:${PORT}/pair`, { method: 'POST', headers: { 'x-hc-secret': pairSecret() } }).then((r) => r.json()).then((j) => j.code);
 
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-e2e-'));
 let ctx, mcp, failed = false;
@@ -168,6 +169,22 @@ try {
   };
   const refOf = (outline, re) => outline.split('\n').find((l) => re.test(l))?.split(' ')[0];
 
+  await step('web pages and strangers cannot reach the bridge', async () => {
+    assert.equal((await fetch(`http://127.0.0.1:${PORT}/pair`, { method: 'POST' })).status, 403, '/pair needs the local secret');
+    assert.equal((await fetch(`http://127.0.0.1:${PORT}/pair`, { method: 'POST', headers: { origin: 'https://evil.example' } })).status, 403);
+    const rebound = await new Promise((resolve) => http.get({ host: '127.0.0.1', port: PORT, path: '/health', headers: { host: `evil.example:${PORT}` } },
+      (res) => { res.resume(); resolve(res.statusCode); }).on('error', () => resolve('error')));
+    assert.equal(rebound, 403, 'DNS rebinding: foreign Host');
+    assert.equal((await fetch(`http://127.0.0.1:${PORT}/mcp`, { method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{}' })).status, 403);
+    const { WebSocket } = await import('ws');
+    const code = await new Promise((resolve) => {
+      const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ext`, { headers: { origin: 'https://evil.example' } });
+      sock.on('unexpected-response', (_req, res) => resolve(res.statusCode));
+      sock.on('open', () => resolve('opened'));
+      sock.on('error', () => {});
+    });
+    assert.equal(code, 403, 'a web page cannot open the extension socket');
+  });
   await step('unknown device cannot take over the connection', async () => {
     const { WebSocket } = await import('ws');
     const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ext`);

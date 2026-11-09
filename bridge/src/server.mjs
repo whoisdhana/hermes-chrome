@@ -32,15 +32,31 @@ const HERMES_URL = (process.env.HC_HERMES_URL || '').replace(/\/$/, '');
 const HERMES_KEY = process.env.HC_HERMES_KEY || '';
 
 const log = (...a) => console.error(new Date().toISOString(), ...a);
+// Host headers we answer to (anything else is DNS rebinding or a misrouted request).
+const ALLOWED_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', ...HOSTS, ...(process.env.HC_ADVERTISE_HOST ? [process.env.HC_ADVERTISE_HOST] : [])]
+  .map((h) => `${h.includes(':') && !h.startsWith('[') ? `[${h}]` : h}:${PORT}`.toLowerCase()));
 const safeEqual = (a, b) => {
   const x = Buffer.from(String(a)), y = Buffer.from(String(b));
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 };
 
+// Minting pairing codes needs this local secret (readable only by this user), so neither a web page nor another
+// user on the machine can ask the bridge for a code.
+const SECRET_FILE = path.join(STATE_DIR, 'pair-secret');
+function pairSecret(create) {
+  try { return fs.readFileSync(SECRET_FILE, 'utf8').trim(); } catch {}
+  if (!create) return '';
+  fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
+  const s = crypto.randomBytes(24).toString('hex');
+  fs.writeFileSync(SECRET_FILE, s, { mode: 0o600 });
+  return s;
+}
+
 // `hermes-chrome-bridge pair`: ask the running bridge for a code and exit.
 if (process.argv[2] === 'pair') {
   try {
-    const r = await fetch(`http://127.0.0.1:${PORT}/pair`, { method: 'POST' });
+    const r = await fetch(`http://127.0.0.1:${PORT}/pair`, { method: 'POST', headers: { 'x-hc-secret': pairSecret(false) } });
+    if (!r.ok) throw new Error(String(r.status));
     const { code } = await r.json();
     console.log(`Pairing code (one use, valid 5 minutes):\n\n${code}\n\nPaste it into the Hermes Chrome extension: Settings → Pair.`);
     process.exit(0);
@@ -64,9 +80,10 @@ function writeDevices(d) {
   fs.renameSync(tmp, devicesFile);
 }
 function newCode() {
+  const now = Date.now();
+  for (const [c, exp] of codes) if (exp < now) codes.delete(c); // expired codes go; failures are NOT reset here
   const code = Array.from(crypto.randomBytes(8), (b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
-  codes.set(code, Date.now() + 300_000);
-  pairFailures = 0;
+  codes.set(code, now + 300_000);
   return `HC-${code.slice(0, 4)}-${code.slice(4)}@${ADVERTISE}:${PORT}`;
 }
 function redeem(raw, deviceName) {
@@ -338,13 +355,16 @@ async function readJson(req) {
 
 async function onRequest(req, res) {
   const url = new URL(req.url, 'http://x');
+  // Web pages must never reach this server: browsers send Origin on cross-site requests, and DNS rebinding
+  // shows up as a foreign Host header. Agents (MCP clients, curl) send neither.
+  if (req.headers.origin || !ALLOWED_HOSTS.has(String(req.headers.host || '').toLowerCase())) { res.writeHead(403).end(); return; }
   if (url.pathname === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify({ ok: true, version: VERSION, extension: ext.connected, browser: ext.info?.browser ?? null }));
+    return res.end(JSON.stringify({ ok: true, extension: ext.connected }));
   }
   const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
   if (url.pathname === '/pair' && req.method === 'POST') {
-    if (!local) { res.writeHead(403).end(); return; }
+    if (!local || !safeEqual(req.headers['x-hc-secret'] || '', pairSecret(true))) { res.writeHead(403).end(); return; }
     res.writeHead(200, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ code: newCode() }));
   }
@@ -367,6 +387,12 @@ async function onRequest(req, res) {
 
 const wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
 function onUpgrade(req, socket, head) {
+  const origin = String(req.headers.origin || '');
+  if (origin && !origin.startsWith('chrome-extension://')) { // only the extension, never a web page
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+    socket.destroy();
+    return;
+  }
   if (new URL(req.url, 'http://x').pathname !== '/ext') {
     socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
     socket.destroy();
@@ -378,6 +404,7 @@ function onUpgrade(req, socket, head) {
     const timer = setTimeout(() => ws.close(4001, 'auth timeout'), 5000);
     ws.once('message', (raw) => {
       clearTimeout(timer);
+      if (raw.length > 16 * 1024) { ws.close(1009, 'first message too large'); return; } // before auth, frames are tiny
       let msg;
       try { msg = JSON.parse(raw); } catch {}
       if (msg?.type === 'pair') {
@@ -403,6 +430,7 @@ function onUpgrade(req, socket, head) {
   });
 }
 
+pairSecret(true);
 for (const host of HOSTS) {
   http.createServer(onRequest).on('upgrade', onUpgrade)
     .listen(PORT, host, () => log(`hermes-chrome bridge ${VERSION} on http://${host}:${PORT} (mcp: /mcp${MCP_ALLOW_REMOTE ? '' : ' loopback only'}, extension: /ext)`));
