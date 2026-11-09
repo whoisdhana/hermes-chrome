@@ -1,6 +1,6 @@
 ---
 name: browser
-description: How to work in the user's real Chrome with the chrome_* tools (plan, intent, refs, handoff, replay, report).
+description: How to work in the user's real Chrome with the chrome_* tools (plan, intent, refs, handoff, replay, report, extract and export research data).
 ---
 
 # Working in the user's Chrome
@@ -19,3 +19,12 @@ The chrome_* tools drive the user's own Chrome: their logins, cookies and histor
 10. Recorded workflows: when the user asks for something they recorded (listed by `chrome_status` and `chrome_replay` with no name), use `chrome_replay {name, vars}`. If it stops at a step, finish the rest yourself.
 11. Need several pages at once (research, comparing prices or options)? Open them with `chrome_open {url, newTab: true}`, read each, and keep the count small. Never navigate away from a tab the user shared with you; open your own instead.
 12. At the end of multi-step work, `chrome_report {summary}` (one line). It closes the extra tabs you opened with newTab.
+
+## Research data: extract, then export
+
+When the user wants facts collected into a table (competitors, pricing, products, reviews, follower counts, ad counts), use `chrome_extract` instead of copying values out of `chrome_text` yourself.
+
+- Open the page, then `chrome_extract {fields: [{name, description}], dataset}`. On list pages (product grids, review lists, search results) add `multiple: true` to get one record per item; if it picks the wrong repeated block, pass `listSelectorHint` (a CSS selector for one item; the result's `list_selector` shows what it used).
+- Use one `dataset` name per job ("acme-competitors") and extract every page into it, then `chrome_export {dataset}`.
+- Every value carries its provenance: source URL, capture time, whether the session looked logged in, and the exact quote from the page. Values whose quote is not on the page are dropped and listed under `dropped`: never report those as facts. `screenshot: true` saves one screenshot per call as extra evidence.
+- `chrome_export` writes Markdown by default (a table plus a Sources section with the URL, time and quote for every row). Use `format: "csv"` or `"json"` (or `"all"`) when the user wants a spreadsheet or data file. Give the user the file path it returns.

@@ -283,6 +283,70 @@ async function replay({ name, vars = {} }) {
   try { return (await ext.call('replay', { name: data.name, steps }, 120_000 + 45_000 * steps.length)).text; } catch (e) { return e.message; }
 }
 
+// ---------------------------------------------------------------- extract / export
+// Pages read with extract, by URL: export checks every quote against the text the page really had.
+const extracted = new Map();
+async function extractPage(args) {
+  const multiple = !!(args.multiple || args.listSelectorHint);
+  const page = await ext.call('extract', { ...args, multiple });
+  extracted.delete(page.url);
+  extracted.set(page.url, page);
+  if (extracted.size > 50) extracted.delete(extracted.keys().next().value);
+  const { pageText, ...rest } = page;
+  return JSON.stringify(multiple ? rest : { ...rest, pageText: pageText.slice(0, 30_000) });
+}
+const QUOTES = { '‘': "'", '’': "'", '“': '"', '”': '"', '–': '-', '—': '-', ' ': ' ' };
+const norm = (s) => String(s ?? '').normalize('NFKC').replace(/[‘’“”–— ]/g, (c) => QUOTES[c]).replace(/\s+/g, ' ').trim();
+const cellText = (v) => (v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v));
+const mdCell = (v) => cellText(v).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\r\n|\r|\n/g, '<br>');
+// Spreadsheets run cells that start with = + - @ (or tab/CR) as formulas: prefix those with an apostrophe.
+const csvCell = (v) => { let s = cellText(v); if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+const logged = (v) => (v === true ? 'yes' : v === false ? 'no' : 'unknown');
+
+function exportRecords({ name = 'default', format = 'md', records }) {
+  const kept = [], dropped = [];
+  for (const r of records) {
+    const page = extracted.get(r.sourceUrl);
+    if (!page) { dropped.push({ sourceUrl: r.sourceUrl, reason: 'call extract on this URL first' }); continue; }
+    const item = r.ref ? page.items?.find((i) => i.ref === r.ref) : null;
+    if (r.ref && !item) { dropped.push({ sourceUrl: r.sourceUrl, ref: r.ref, reason: 'no such list item' }); continue; }
+    const hay = norm(item ? item.text : page.pageText);
+    const values = {};
+    for (const [f, v] of Object.entries(r.values)) {
+      const q = norm(v.quote);
+      if (q && hay.includes(q)) values[f] = { value: v.value, quote: q };
+      else dropped.push({ sourceUrl: r.sourceUrl, ref: r.ref, field: f, value: v.value, quote: v.quote, reason: 'quote not found word for word on the page' });
+    }
+    if (Object.keys(values).length) {
+      kept.push({ values, source_url: page.url, page_title: page.title, captured_at: page.capturedAt, logged_in: page.loggedIn, ...(item ? { ref: item.ref } : {}) });
+    }
+  }
+  if (!kept.length) return JSON.stringify({ error: 'No values could be checked against the page text.', dropped });
+  const cols = [...new Set(kept.flatMap((r) => Object.keys(r.values)))];
+  const safe = String(name).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[._-]+|[._-]+$/g, '').slice(0, 60) || 'dataset';
+  const at = new Date().toISOString();
+  const body = {
+    md: () => [`# ${mdCell(name)}`, '', `Exported ${at}. ${kept.length} rows. Every value was found word for word on its source page (see Sources).`, '',
+      `| # | ${cols.map(mdCell).join(' | ')} |`, `|---|${'---|'.repeat(cols.length)}`,
+      ...kept.map((r, i) => `| ${i + 1} | ${cols.map((c) => mdCell(r.values[c]?.value)).join(' | ')} |`), '', '## Sources', '',
+      ...kept.flatMap((r, i) => [`${i + 1}. <${r.source_url}>, captured ${r.captured_at}, logged in: ${logged(r.logged_in)}`,
+        ...Object.entries(r.values).map(([c, v]) => `   - ${norm(c)}: "${v.quote}"`)]), ''].join('\n'),
+    csv: () => '﻿' + [[...cols, 'source_url', 'captured_at', 'logged_in', 'page_title', ...cols.map((c) => `${c} (quote)`)],
+      ...kept.map((r) => [...cols.map((c) => r.values[c]?.value), r.source_url, r.captured_at, logged(r.logged_in), r.page_title, ...cols.map((c) => r.values[c]?.quote)])]
+      .map((row) => row.map(csvCell).join(',')).join('\r\n') + '\r\n',
+    json: () => JSON.stringify({ dataset: name, exported_at: at, records: kept }, null, 2),
+  };
+  const dir = path.join(STATE_DIR, 'exports');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stamp = at.replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  const files = (format === 'all' ? ['md', 'csv', 'json'] : [format]).map((f) => {
+    const file = path.join(dir, `${safe}-${stamp}.${f}`);
+    fs.writeFileSync(file, body[f](), { mode: 0o600 });
+    return file;
+  });
+  return JSON.stringify({ rows: kept.length, files, ...(dropped.length ? { dropped } : {}) });
+}
+
 // ---------------------------------------------------------------- tools
 const tabId = z.number().int().optional().describe('Tab id from tabs_list/tab_open. Omit to use the most recent agent tab.');
 const ref = z.string().optional().describe('Element ref from read_page or find, e.g. "e12".');
@@ -312,6 +376,16 @@ export const TOOLS = [
   ['plan', 'Show your plan as a progress strip in the browser: call with steps first, then with done=N as you finish steps.', { steps: z.array(z.string()).optional(), done: z.number().int().optional() }],
   ['report', 'Finish a task: returns stats and snapshots of the last steps for your summary to the user.', { summary: z.string() }],
   ['replay', 'Run a workflow the user recorded in the side panel (Teach tab). Omit name to list them; vars fills {{placeholders}}.', { name: z.string().optional(), vars: z.record(z.string()).optional() }],
+  ['extract', 'Read a page for structured research data (competitors, prices, products, reviews). The bridge has no model of its own, so this returns the raw material and YOU fill the fields: the page text, or with multiple=true one text block per repeated list item (product cards, reviews, result rows) with its ref, plus the URL, capture time and whether the session looked logged in. Then pass your records to export, each value with the exact quote it came from.',
+    { tabId, multiple: z.boolean().optional().describe('One block per repeated list item instead of the whole page text.'),
+      listSelectorHint: z.string().optional().describe('CSS selector matching each list item, if the automatic list detection picks the wrong thing. Implies multiple.'),
+      maxItems: z.number().int().optional().describe('Most list items to read (default 50, max 200).') }],
+  ['export', 'Write records you filled from extract to a file and return its path: Markdown (default: a table plus a Sources section with URL, time and quote per row), CSV or JSON. Each value needs the exact quote from the page; values whose quote is not in the text extract returned for that URL (and item) are dropped and listed.',
+    { name: z.string().optional().describe('Dataset/file name, e.g. "acme-competitors".'),
+      format: z.enum(['md', 'csv', 'json', 'all']).optional(),
+      records: z.array(z.object({ sourceUrl: z.string().describe('URL of the extract call the values came from.'),
+        ref: z.string().optional().describe('Item ref from extract (multiple=true): the quote must be in that item.'),
+        values: z.record(z.object({ value: z.union([z.string(), z.number()]), quote: z.string() })) })).min(1) }],
 ];
 
 function toContent(result) {
@@ -327,6 +401,10 @@ function buildMcpServer() {
   const server = new McpServer({ name: 'hermes-chrome', version: VERSION });
   for (const [name, description, shape] of TOOLS) {
     server.registerTool(name, { description, inputSchema: shape }, async (args) => {
+      if (name === 'export') { // files only: works without the browser
+        const text = exportRecords(args);
+        return { content: [{ type: 'text', text }], isError: text.startsWith('{"error"') };
+      }
       if (!ext.connected) return { content: [{ type: 'text', text: UNAVAILABLE }], isError: true };
       if (name === 'replay') return { content: [{ type: 'text', text: await replay(args) }] };
       if (name === 'browser_status') {
@@ -336,6 +414,7 @@ function buildMcpServer() {
       const timeout = name === 'handoff' ? ((args.timeoutSec ?? 600) + 15) * 1000
         : name === 'batch' ? Math.min(900, 120 + 30 * args.actions.length) * 1000 : CALL_TIMEOUT_MS;
       try {
+        if (name === 'extract') return { content: [{ type: 'text', text: await extractPage(args) }] };
         return { content: toContent(await ext.call(name, args, timeout)) };
       } catch (e) {
         return { content: [{ type: 'text', text: e.message }], isError: true };

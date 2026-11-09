@@ -23,5 +23,7 @@ provides_tools:
   - chrome_plan
   - chrome_report
   - chrome_replay
+  - chrome_extract
+  - chrome_export
 provides_hooks:
   - pre_llm_call

@@ -419,6 +419,50 @@
     return null;
   }
 
+  // ------------------------------------------------------------ structured extraction
+  // Best guess at whether the page shows a signed-in session: true, false, or null when it cannot tell.
+  function loggedInGuess() {
+    const els = [...document.querySelectorAll('a,button,[role=button],[role=menuitem]')].slice(0, 3000);
+    const OUT = /\b(log ?out|sign ?out)\b|\/(logout|signout|sign_out|log_out)\b/i;
+    if (els.some((el) => OUT.test(`${el.textContent || ''} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('href') || ''}`))) return true;
+    const visible = els.filter(isVisible);
+    if ([...document.querySelectorAll('input[type=password]')].some(isVisible)) return false;
+    if (visible.some((el) => /^(log ?in|sign ?in|sign up|join( now)?|create (an )?account)$/i.test((el.innerText || '').trim()))) return false;
+    if (visible.some((el) => /\b(your account|my account|account menu|profile|avatar)\b/i.test(el.getAttribute('aria-label') || ''))) return true;
+    return null;
+  }
+
+  const sig = (el) => `${el.tagName}.${[...el.classList].sort().join('.')}`;
+  // The page's main repeated items (product cards, reviews, result rows): the largest group of same-shaped siblings with text.
+  function findList(hint, max) {
+    if (hint) {
+      let els;
+      try { els = [...document.querySelectorAll(hint)]; } catch { throw new Error(`listSelectorHint "${hint}" is not a valid CSS selector`); }
+      return { els: els.filter(isVisible).slice(0, max), selector: hint };
+    }
+    let best = null;
+    for (const parent of walk(document.body || document.documentElement)) {
+      if (parent.children.length < 3) continue;
+      const groups = new Map();
+      for (const k of parent.children) groups.set(sig(k), [...(groups.get(sig(k)) || []), k]);
+      for (const g of groups.values()) {
+        if (g.length < 3) continue;
+        const vis = g.filter((el) => (el.innerText || '').trim().length >= 10 && isVisible(el));
+        if (vis.length < 3) continue;
+        const avg = vis.reduce((s, el) => s + Math.min(el.innerText.length, 300), 0) / vis.length;
+        const nested = vis.filter((el) => el.children.length > 0).length / vis.length; // cards beat bare links
+        const score = vis.length * avg * (1 + nested);
+        if (!best || score > best.score) best = { score, els: vis, parent };
+      }
+    }
+    if (!best) return { els: [], selector: null };
+    const k = best.els[0];
+    const cls = [...k.classList].map((c) => `.${CSS.escape(c)}`).join('');
+    return { els: best.els.slice(0, max), selector: `${cssPath(best.parent)} > ${k.tagName.toLowerCase()}${cls}` };
+  }
+
+  const blockText = (el, n = 2000) => { const t = (el.innerText || '').replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim(); return t.length > n ? t.slice(0, n) : t; };
+
   // ------------------------------------------------------------ API (called by background.js)
   // CAPTCHA and bot challenges. The agent never solves them; it hands them to the person and notices when they are done.
   const CHALLENGE = 'iframe[src*="recaptcha"], iframe[src*="hcaptcha.com"], iframe[src*="challenges.cloudflare.com"], iframe[src*="arkoselabs"],'
@@ -480,6 +524,23 @@
     text({ maxChars = 20000 } = {}) {
       const t = (document.body?.innerText || '').replace(/\n{3,}/g, '\n\n');
       return `Page: ${document.title} — ${location.href}\n\n` + (t.length > maxChars ? t.slice(0, maxChars) + `\n…(truncated, ${t.length} chars total)` : t);
+    },
+
+    // Raw material for chrome_extract: the page text, or one text block per list item with its ref. Values are filled
+    // and their quotes checked on the agent's side; nothing leaves the page except this text.
+    extract({ multiple = false, listSelectorHint, maxItems = 50 } = {}) {
+      const max = Math.max(1, Math.min(200, Number(maxItems) || 50));
+      const out = { url: location.href, title: document.title, capturedAt: new Date().toISOString(), loggedIn: loggedInGuess(),
+        pageText: (document.body?.innerText || '').replace(/\n{3,}/g, '\n\n').slice(0, 200_000) };
+      if (multiple) {
+        const { els, selector } = findList(listSelectorHint, max);
+        out.listSelector = selector;
+        out.items = els.map((el) => {
+          const href = (el.matches('a[href]') ? el : el.querySelector('a[href]'))?.href;
+          return { ref: refFor(el), text: blockText(el) + (href && /^https?:/.test(href) ? `\nLink: ${href}` : '') };
+        });
+      }
+      return out;
     },
 
     // What is really under (x, y) right now: the named element (or something inside it), and if it is a frame, where it points.

@@ -910,6 +910,14 @@ const METHODS = {
     return ok(await page(tab.id, 'text', { maxChars }));
   },
 
+  async extract({ tabId, multiple, listSelectorHint, maxItems }) {
+    const tab = await resolveTab(tabId); // refuses blocked sites; watched sites are fine for reading
+    pageQuiet(tab.id, 'reading');
+    const res = await page(tab.id, 'extract', { multiple, listSelectorHint, maxItems });
+    logActivity(tab.id, 'extract', multiple ? `Read ${res.items.length} items on ${hostOf(tab.url)}` : `Read ${hostOf(tab.url)} for extraction`);
+    return { ...res, tabId: tab.id };
+  },
+
   async screenshot({ tabId, forPing }) {
     const tab = await resolveTab(tabId);
     if (forPing && await hostWatched(tab.url)) return { text: 'no picture of this site leaves the browser' }; // bank, mail, payments
