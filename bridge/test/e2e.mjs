@@ -169,6 +169,17 @@ try {
     if (r.isError) throw new Error(`${name}: ${text}`);
     return { text, content: r.content };
   };
+  // Approvals open in the extension's own window (never in the page): find it and press a button by its label.
+  const approve = async (label) => {
+    let win;
+    for (let i = 0; i < 100 && !win; i++) { win = ctx.pages().find((pg) => pg.url().includes('/approve.html')); if (!win) await sleep(100); }
+    assert.ok(win, 'approval window opened');
+    const btn = win.getByRole('button', { name: label, exact: true });
+    await btn.waitFor();
+    await win.waitForSelector('button:not([disabled])');
+    await btn.click();
+    for (let i = 0; i < 50 && !win.isClosed(); i++) await sleep(100);
+  };
   const refOf = (outline, re) => outline.split('\n').find((l) => re.test(l))?.split(' ')[0];
 
   await step('web pages and strangers cannot reach the bridge', async () => {
@@ -219,12 +230,12 @@ try {
     assert.match((await call('get_text', { tabId })).text, /Hello Ada Lovelace/);
   });
   await step('find', async () => assert.match((await call('find', { tabId, query: 'delete' })).text, /Delete account/));
-  await step('risky click asks; Enter = Deny', async () => {
+  await step('risky click asks in the extension window; Deny', async () => {
     const p = ctx.pages().find((pg) => pg.url().startsWith(`http://127.0.0.1:${PAGE_PORT}`));
     const pending = call('click', { tabId, ref: refOf(outline, /Delete account/), why: 'Deleting the test account' }).then(() => 'resolved', (e) => e.message);
     await sleep(1500);
     await p.screenshot({ path: path.join(SHOTS, 'hc-confirm.png') });
-    await p.keyboard.press('Enter');
+    await approve('Deny');
     assert.match(await pending, /did not allow/);
     assert.doesNotMatch((await call('get_text', { tabId })).text, /DELETED/);
   });
@@ -237,12 +248,12 @@ try {
     const ref = refOf(outline, /textbox "Full name"/);
     let pending = call('type', { tabId, ref, text: 'Watched', clear: true, why: 'Entering the name' }).then(() => 'resolved', (e) => e.message);
     await sleep(1500);
-    await p.keyboard.press('Enter'); // Deny has focus
+    await approve('Deny');
     assert.match(await pending, /did not allow/);
     pending = call('press_key', { tabId, key: 'Tab', why: 'Moving to the next field' }).then(() => 'resolved', (e) => e.message);
     await sleep(1500);
-    await p.keyboard.press('Tab'); // focus moves from Deny to Allow
-    await p.keyboard.press('Enter');
+    await approve('Allow');
+
     assert.equal(await pending, 'resolved');
     await sw.evaluate(() => chrome.storage.local.set({ watchHosts: '' }));
   });
@@ -267,15 +278,15 @@ try {
   await step('new site: Decline, Allow once (until report), Always allow', async () => {
     const p = ctx.pages().find((pg) => pg.url().startsWith(`http://127.0.0.1:${PAGE_PORT}`));
     const key = () => call('press_key', { tabId, key: 'Tab', why: 'Moving to the next field' }).then(() => 'resolved', (e) => e.message);
-    const answer = async (tabs) => { await sleep(1500); for (let i = 0; i < tabs; i++) await p.keyboard.press('Tab'); await p.keyboard.press('Enter'); };
+    const answer = (label) => approve(label);
     await sw.evaluate(() => chrome.storage.local.set({ allowedHosts: '' }));
-    let pending = key(); await answer(0); // Decline has focus
+    let pending = key(); await answer('Decline');
     assert.match(await pending, /did not allow acting on 127\.0\.0\.1/);
-    pending = key(); await answer(1); // Allow once
+    pending = key(); await answer('Allow once');
     assert.equal(await pending, 'resolved');
     assert.equal(await key(), 'resolved', 'no second prompt within the task');
     await call('report', { summary: 'Task done' }); // ends the "once"
-    pending = key(); await answer(2); // Always allow
+    pending = key(); await answer('Always allow');
     assert.equal(await pending, 'resolved');
     assert.equal(await sw.evaluate(() => chrome.storage.local.get('allowedHosts').then((s) => s.allowedHosts)), '127.0.0.1');
     await call('report', { summary: 'Task done' });
@@ -416,16 +427,16 @@ try {
     await sw.evaluate(() => { globalThis.__origCheck = requestIntentCheck; requestIntentCheck = async () => ({ ok: false, reason: 'You did not ask to delete anything.' }); });
     let pending = call('click', { tabId, ref: refOf(o, /Delete account/), why: 'Cleaning up' }).then(() => 'resolved', (e) => e.message);
     await sleep(1500);
-    await p.keyboard.press('Enter'); // Deny
+    await approve('Deny');
     assert.match(await pending, /Blocked: You did not ask to delete anything/);
     pending = call('click', { tabId, ref: refOf(o, /Delete account/), why: 'Cleaning up' }).then(() => 'resolved', (e) => e.message);
     await sleep(1500);
-    await p.keyboard.press('Tab'); await p.keyboard.press('Enter'); // Allow anyway
+    await approve('Allow');
     assert.equal(await pending, 'resolved', 'one prompt only: the risky-click prompt is not shown again');
     assert.match((await call('get_text', { tabId })).text, /DELETED/);
     pending = call('navigate', { tabId, url: `http://localhost:${PAGE_PORT}/?data=secret`, why: 'Opening the next site' }).then(() => 'resolved', (e) => e.message);
     await sleep(1500);
-    await p.keyboard.press('Enter'); // Deny
+    await approve('Deny');
     assert.match(await pending, /Blocked/, 'data-carrying navigation to another host is checked');
     await sw.evaluate(() => { globalThis.__checks = []; requestIntentCheck = async (c) => { __checks.push(c); return { ok: true }; }; });
     await call('navigate', { tabId, url: `http://127.0.0.1:${PAGE_PORT}/` });

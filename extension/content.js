@@ -195,8 +195,6 @@
         .handoff button { all: unset; cursor: pointer; padding: 8px 14px; border-radius: 9px; font-size: 13px; font-weight: 700; }
         .handoff .done { background: #BA583D; color: #FBF1E6; }
         .handoff .skip { color: #A8A29E; }
-        .handoff .once { color: #FAFAF9; box-shadow: inset 0 0 0 1px #57534E; }
-        .handoff.site { flex-wrap: wrap; } .handoff.site .msg { flex-basis: 100%; }
         .handoff button:focus-visible { outline: 2px solid #E9A58F; outline-offset: 2px; }
       </style>
       <div class="glow"></div>
@@ -562,44 +560,18 @@
       });
     },
 
-    // First action on a site the user has not approved yet. Resolves "always", "once", "deny" or "timeout".
-    siteAsk({ message, timeoutSec = 120 }) {
+    // The agent is waiting for an Allow / Deny in the extension's own window. Only a notice here: decisions are
+    // never taken inside the page, which could restyle or fake its buttons.
+    waiting({ message }) {
       const u = overlay();
       u.root.querySelector('.handoff')?.remove();
       const box = document.createElement('div');
-      box.className = 'handoff site';
-      box.setAttribute('role', 'alertdialog');
-      box.innerHTML = `<div class="msg"><span class="who">New site</span>${esc(message)}</div>
-        <button class="skip" type="button">Decline</button><button class="once" type="button">Allow once</button><button class="done" type="button">Always allow</button>`;
+      box.className = 'handoff waiting';
+      box.setAttribute('role', 'status');
+      box.innerHTML = `<div class="msg"><span class="who">Approval needed</span>${esc(message)}</div>`;
       u.root.appendChild(box);
-      box.querySelector('.skip').focus();
-      return new Promise((resolve) => {
-        const finish = (status) => { clearTimeout(t); box.remove(); resolve(status); };
-        const t = setTimeout(() => finish('timeout'), timeoutSec * 1000);
-        box.querySelector('.done').addEventListener('click', () => finish('always'));
-        box.querySelector('.once').addEventListener('click', () => finish('once'));
-        box.querySelector('.skip').addEventListener('click', () => finish('deny'));
-      });
     },
-
-    // Approval gate for risky clicks (pay, delete, send...). Resolves "allow", "deny" or "timeout".
-    confirm({ message, timeoutSec = 120 }) {
-      const u = overlay();
-      u.root.querySelector('.handoff')?.remove();
-      const box = document.createElement('div');
-      box.className = 'handoff';
-      box.setAttribute('role', 'alertdialog');
-      box.innerHTML = `<div class="msg"><span class="who">Approval needed</span>${esc(message)}</div>
-        <button class="skip" type="button">Deny</button><button class="done" type="button">Allow</button>`;
-      u.root.appendChild(box);
-      box.querySelector('.skip').focus();
-      return new Promise((resolve) => {
-        const finish = (status) => { clearTimeout(t); box.remove(); resolve(status); };
-        const t = setTimeout(() => finish('timeout'), timeoutSec * 1000);
-        box.querySelector('.done').addEventListener('click', () => finish('allow'));
-        box.querySelector('.skip').addEventListener('click', () => finish('deny'));
-      });
-    },
+    waitingDone() { overlay().root.querySelector('.handoff.waiting')?.remove(); },
   };
 
   chrome.storage?.local.get({ agentName: 'Hermes' }).then((s) => API.configure({ name: s.agentName })).catch(() => {});

@@ -475,9 +475,10 @@ async function maybeAskSite(tab) {
   const host = (() => { try { return new URL(tab.url).hostname; } catch { return ''; } })();
   if (!s.askNewSites || !host || onceHosts.has(host) || hostIn(s.allowedHosts, tab.url) || await hostWatched(tab.url)) return;
   await setGroupStatus('✋');
-  notify(`${s.agentName} wants to act on ${host}`, 'Allow it in the browser tab.', tab.id);
+  notify(`${s.agentName} wants to act on ${host}`, 'Answer in the Hermes Chrome window.', tab.id);
   needsYou++; refreshIndicators();
-  const answer = await page(tab.id, 'siteAsk', { message: `Let ${s.agentName} click and type on ${host}?`, timeoutSec: 120 })
+  const answer = await askUser(tab.id, { site: host, message: `Let ${s.agentName} click and type on ${host}?`,
+    choices: [{ label: 'Decline', value: 'deny' }, { label: 'Allow once', value: 'once' }, { label: 'Always allow', value: 'always', primary: true }] })
     .finally(() => { needsYou--; refreshIndicators(); });
   logActivity(tab.id, 'permission', `${host}: ${{ always: 'always allowed', once: 'allowed for this task', deny: 'declined', timeout: 'no answer' }[answer] || answer}`);
   if (answer === 'once') return void onceHosts.add(host);
@@ -515,7 +516,8 @@ async function checkIntent(tabId, check) {
   await setGroupStatus('✋');
   notify(`${s.agentName} needs your OK`, v.reason, tabId);
   needsYou++; refreshIndicators();
-  const answer = await page(tabId, 'confirm', { message: `${v.reason} Allow ${s.agentName} to ${check.action} ${check.target || ''} anyway?`.replace(/\s+/g, ' '), timeoutSec: 120 })
+  const answer = await askUser(tabId, { site: hostOf(check.url || ''), message: `${v.reason} Allow ${s.agentName} to ${check.action} ${check.target || ''} anyway?`.replace(/\s+/g, ' '),
+    choices: [{ label: 'Deny', value: 'deny' }, { label: 'Allow', value: 'allow', primary: true }] })
     .finally(() => { needsYou--; refreshIndicators(); });
   if (answer !== 'allow') throw new Error(`Blocked: ${v.reason} The user did not allow it. Do not try another way; ask them.`);
   return 'asked';
@@ -545,6 +547,39 @@ async function verifyTarget(tab, { ref, x, y, desc }) {
   }
 }
 
+// Every Allow / Deny decision happens in a small window the extension owns, never inside the web page: a page
+// could restyle, cover or imitate buttons drawn in its own DOM (clickjacking). The page only shows that the agent
+// is waiting. Closing the window or two minutes without an answer count as no.
+const approvalWaiters = new Map();
+chrome.runtime.onMessage.addListener((msg, sender) => {
+  if (msg?.approval && sender.id === chrome.runtime.id && sender.url?.startsWith(chrome.runtime.getURL('approve.html'))) approvalWaiters.get(msg.approval)?.(msg.answer);
+});
+async function askUser(tabId, { message, site = '', choices }) {
+  const id = crypto.randomUUID();
+  await chrome.storage.session.set({ [`approval:${id}`]: { message, site, choices } });
+  if (tabId != null) pageQuiet(tabId, 'waiting', { message: 'Waiting for your OK in the Hermes Chrome window' });
+  const win = await chrome.windows.create({ url: chrome.runtime.getURL(`approve.html?id=${id}`), type: 'popup', width: 460, height: 250, focused: true }).catch(() => null);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (answer) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      approvalWaiters.delete(id);
+      chrome.windows.onRemoved.removeListener(onClosed);
+      chrome.storage.session.remove(`approval:${id}`);
+      if (win) chrome.windows.remove(win.id).catch(() => {});
+      if (tabId != null) pageQuiet(tabId, 'waitingDone');
+      resolve(answer === 'timeout' || choices.some((c) => c.value === answer) ? answer : 'deny');
+    };
+    const timer = setTimeout(() => finish('timeout'), 120_000);
+    const onClosed = (wid) => { if (wid === win?.id) setTimeout(() => finish('deny'), 500); }; // an answer sent just before closing wins
+    chrome.windows.onRemoved.addListener(onClosed);
+    approvalWaiters.set(id, finish);
+    if (!win) finish('deny');
+  });
+}
+
 // Risky clicks anywhere, and every action on a watched site (webmail, payments, banks), wait for the user's OK.
 async function maybeConfirm(tabId, desc, url, action = 'click') {
   const s = await settings();
@@ -554,7 +589,7 @@ async function maybeConfirm(tabId, desc, url, action = 'click') {
   const what = `${action} ${desc.replace(/^e\d+ /, '')}`.trim() + (watched ? ` on ${hostOf(url)}` : '');
   notify(`${s.agentName} needs your OK`, `Allow it to ${what}?`, tabId);
   needsYou++; refreshIndicators();
-  const answer = await page(tabId, 'confirm', { message: `Allow ${s.agentName} to ${what}?`, timeoutSec: 120 })
+  const answer = await askUser(tabId, { site: hostOf(url || ''), message: `Allow ${s.agentName} to ${what}?`, choices: [{ label: 'Deny', value: 'deny' }, { label: 'Allow', value: 'allow', primary: true }] })
     .finally(() => { needsYou--; refreshIndicators(); });
   if (answer !== 'allow') throw new Error(`The user did not allow this action (${answer}). Ask them before trying again.`);
 }
