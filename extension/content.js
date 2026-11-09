@@ -150,15 +150,6 @@
         .cursor.on { opacity: 1; }
         .cursor svg { width: 26px; height: 26px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); transition: transform .12s; transform-origin: 3px 3px; }
         .cursor.press svg { transform: scale(.82); }
-        .tag { position: absolute; left: 20px; top: 22px; display: flex; align-items: center; gap: 5px; padding: 2px 9px 2px 2px;
-          border-radius: 999px; background: #BA583D; color: #FBF1E6; font-size: 11px; font-weight: 700; white-space: nowrap;
-          box-shadow: 0 2px 6px rgba(0,0,0,.25); }
-        .tag img { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; background: #EDE4D9; }
-        .intent { position: absolute; left: 20px; top: 48px; max-width: 280px; padding: 6px 10px; border-radius: 10px;
-          background: #FFFDFA; color: #35302A; border: 1px solid #E7D6C8; font-size: 12px; line-height: 1.35; font-weight: 500;
-          box-shadow: 0 6px 18px rgba(53,48,42,.18); opacity: 0; transform: translateY(-4px); transition: opacity .2s, transform .2s;
-          white-space: normal; }
-        .intent.on { opacity: 1; transform: none; }
         .plan { position: fixed; top: 10px; left: 50%; transform: translate(-50%, -12px); width: min(520px, calc(100vw - 24px));
           pointer-events: auto; background: #FFFDFA; color: #35302A; border: 1px solid #E7D6C8; border-radius: 12px;
           box-shadow: 0 8px 26px rgba(53,48,42,.18); padding: 8px 10px 9px 12px; opacity: 0; transition: opacity .25s, transform .25s; }
@@ -210,8 +201,7 @@
       </style>
       <div class="glow"></div>
       <div class="cursor"><svg viewBox="0 0 26 26"><path d="M3 2.5 L3 20 L8 15.5 L11.2 22.5 L14.3 21.1 L11.2 14.3 L18 14.3 Z"
-        fill="#35302A" stroke="#FFFFFF" stroke-width="1.6" stroke-linejoin="round"/></svg>
-        <span class="tag"><img alt=""><span class="name"></span></span><div class="intent"></div></div>
+        fill="#35302A" stroke="#FFFFFF" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
       <div class="plan" role="status"><div class="row"><span class="who"></span><span class="now"></span><span class="count"></span>
         <button class="pause" type="button" title="Pause (⌥⇧.)">⏸</button><button class="stop" type="button" title="Stop this task">✕</button></div>
         <div class="bar"><i></i></div></div>
@@ -221,13 +211,9 @@
       root,
       glow: root.querySelector('.glow'),
       cursor: root.querySelector('.cursor'),
-      tag: root.querySelector('.tag .name'),
-      intent: root.querySelector('.intent'),
       plan: root.querySelector('.plan'),
       toast: root.querySelector('.toast'),
     };
-    ui.tag.textContent = agentName;
-    try { root.querySelector('.tag img').src = chrome.runtime.getURL('icons/avatar.png'); } catch {}
     ui.plan.querySelector('.pause').onclick = () => chrome.runtime.sendMessage({ hud: ui.plan.classList.contains('paused') ? 'resume' : 'pause' });
     ui.plan.querySelector('.stop').onclick = () => chrome.runtime.sendMessage({ hud: 'stop' });
     if (hudState) renderHud(hudState);
@@ -342,16 +328,6 @@
     p.querySelector('.stop').title = s.recording ? 'Stop recording' : 'Stop this task';
   }
 
-  let intentTimer;
-  function showIntent(text) {
-    const u = overlay();
-    clearTimeout(intentTimer);
-    if (!text) { u.intent.classList.remove('on'); return; }
-    u.intent.textContent = text;
-    u.intent.classList.add('on');
-    intentTimer = setTimeout(() => u.intent.classList.remove('on'), 2600);
-  }
-
   function readingSweep() {
     if (REDUCED) return;
     const u = overlay();
@@ -454,7 +430,7 @@
 
   // ------------------------------------------------------------ API (called by background.js)
   const API = {
-    configure({ name }) { agentName = name || agentName; if (ui) ui.tag.textContent = agentName; },
+    configure({ name }) { agentName = name || agentName; },
 
     outline({ interactiveOnly = true } = {}) {
       const els = collect(interactiveOnly);
@@ -486,13 +462,10 @@
       return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), w: r.width, h: r.height, desc: line(el) };
     },
 
-    async pointAt({ x, y, ref, why }) {
-      if (why) showIntent(why);
+    async pointAt({ x, y, ref }) {
       if (ref) highlight(elFor(ref));
       await cursorTo(x, y);
     },
-
-    intent({ text }) { overlay(); showIntent(text); },
 
     // Mark the tab in the tab strip: a favicon with a status dot (null restores the page's own icon).
     favicon({ dataUrl }) {

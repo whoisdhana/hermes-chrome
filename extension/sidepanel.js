@@ -98,7 +98,6 @@ function refreshSend() { send.classList.toggle('idle', !running && !input.value.
 function setRunning(chatId) {
   running = chatId;
   $('sendLabel').textContent = chatId ? 'Stop' : 'Send';
-  send.title = chatId ? 'Stop' : 'Send';
   send.classList.toggle('stop', !!chatId);
   refreshSend();
   if (chatId && !working) {
@@ -194,7 +193,7 @@ function renderTeach() {
     v.innerHTML = `<div class="card"><b>Review and save</b>
       <label class="field">Name<input id="skName" placeholder="e.g. meta-ads-weekly-export" spellcheck="false"></label>
       <label class="field">What it does<input id="skDesc" placeholder="e.g. Export last week's Meta Ads report as CSV"></label>
-      <ol class="steps">${teach.steps.map((s, i) => `<li><span>${esc(stepText(s))}</span><button class="del" data-i="${i}" type="button" title="Remove step">×</button>
+      <ol class="steps">${teach.steps.map((s, i) => `<li><span>${esc(stepText(s))}</span><button class="del" data-i="${i}" type="button" aria-label="Remove step">×</button>
         ${s.action === 'type' && !s.secret ? `<label class="var"><input type="checkbox" data-var="${i}"${String(s.value).startsWith('{{') ? ' checked' : ''}> Ask for this each time</label>` : ''}</li>`).join('')}</ol>
       <div class="row"><button class="big" id="skSave" type="button">Save as skill</button><button class="quietbtn" id="skDiscard" type="button">Discard</button></div>
       <span class="error" id="skErr"></span></div>`;
@@ -240,7 +239,7 @@ function renderSaved() {
       <div class="row">
         <button class="big" data-run type="button"${st.status === 'running' ? ' disabled' : ''}>${st.status === 'running' ? 'Running…' : '▶ Run'}</button>
         ${st.confirmDelete ? '<button class="big stop" data-del-yes type="button">Delete it</button><button class="quietbtn" data-del-no type="button">Keep</button>'
-          : '<button class="quietbtn" data-del type="button" title="Delete this task">🗑</button>'}
+          : '<button class="quietbtn" data-del type="button" aria-label="Delete this task">🗑</button>'}
       </div>
       ${st.text ? `<p class="${st.status === 'error' ? 'error' : 'note'}">${esc(st.text)}</p>` : ''}`;
     card.querySelector('[data-run]').onclick = () => {
@@ -363,7 +362,7 @@ function renderAttachments() {
   attachments.forEach((a, i) => {
     const chip = document.createElement('div');
     chip.className = 'att-chip';
-    chip.innerHTML = `${a.kind === 'image' ? `<img src="${a.dataUrl}" alt="">` : '<span class="ico">📄</span>'}<span>${esc(a.name)}</span><button type="button" title="Remove">×</button>`;
+    chip.innerHTML = `${a.kind === 'image' ? `<img src="${a.dataUrl}" alt="">` : '<span class="ico">📄</span>'}<span>${esc(a.name)}</span><button type="button" aria-label="Remove">×</button>`;
     chip.querySelector('button').onclick = () => { attachments.splice(i, 1); renderAttachments(); };
     atts.appendChild(chip);
   });
@@ -556,7 +555,7 @@ $('new').onclick = newChat;
 async function refreshStatus() {
   const { connected: now } = await chrome.runtime.sendMessage({ popup: 'status' }).catch(() => ({ connected: false }));
   $('dot').classList.toggle('on', !!now);
-  $('dot').title = now ? 'Connected' : 'Not connected. Right-click the toolbar icon for Settings.';
+  $('dot').setAttribute('aria-label', now ? 'Connected' : 'Not connected. Right-click the toolbar icon for Settings.');
   if (now && !connected) port.postMessage({ type: 'meta' }); // (re)load models and skills on connect
   connected = !!now;
 }

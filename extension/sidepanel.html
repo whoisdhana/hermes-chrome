@@ -172,15 +172,15 @@
 </head>
 <body>
   <header>
-    <div class="who"><span class="dot" id="dot"></span><h1 id="title">Hermes</h1></div>
+    <div class="who"><span class="dot" id="dot" role="img" aria-label="Not connected"></span><h1 id="title">Hermes</h1></div>
     <nav role="tablist" aria-label="Views">
       <button role="tab" data-view="log" aria-selected="true" type="button">Chat</button>
       <button role="tab" data-view="activity" aria-selected="false" type="button">Activity</button>
       <button role="tab" data-view="teach" aria-selected="false" type="button">Teach</button>
     </nav>
     <div class="tools">
-      <button id="pauseBtn" type="button" hidden title="Pause or resume (⌥⇧.)">Pause</button>
-      <button class="iconbtn" id="new" type="button" title="New chat"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg><span class="sr">New chat</span></button>
+      <button id="pauseBtn" type="button" hidden>Pause</button>
+      <button class="iconbtn" id="new" type="button"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg><span class="sr">New chat</span></button>
     </div>
   </header>
 
@@ -202,10 +202,10 @@
       <div id="atts"></div>
       <textarea id="input" rows="1" placeholder="Ask your agent…"></textarea>
       <div class="bar">
-        <button class="chip" id="plusBtn" type="button" title="Attach" aria-haspopup="menu"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span class="sr">Attach</span></button>
-        <label class="chip" id="tabChip" title="Let the agent work in the tab you are looking at"><input id="useTab" type="checkbox" checked><span class="sw"></span>This tab</label>
+        <button class="chip" id="plusBtn" type="button" aria-haspopup="menu"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span class="sr">Attach</span></button>
+        <label class="chip" id="tabChip"><input id="useTab" type="checkbox" checked><span class="sw"></span>This tab</label>
         <span class="grow"></span>
-        <span class="chip" id="modelChip" title="Model for this chat"><span id="modelLabel">Default model</span><svg viewBox="0 0 24 24" style="width:14px;height:14px"><path d="m6 9 6 6 6-6"/></svg>
+        <span class="chip" id="modelChip"><span id="modelLabel">Default model</span><svg viewBox="0 0 24 24" style="width:14px;height:14px"><path d="m6 9 6 6 6-6"/></svg>
           <select id="model" aria-label="Model"><option value="">Default model</option></select></span>
         <button id="send" class="idle" type="button"><svg class="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg><svg class="i-stop" viewBox="0 0 12 12"><rect width="12" height="12" rx="2.5"/></svg><span class="sr" id="sendLabel">Send</span></button>
       </div>

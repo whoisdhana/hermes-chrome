@@ -11,9 +11,9 @@ from .hub import BrowserUnavailable
 
 TAB = {"type": "integer", "description": "Tab id from chrome_tabs / chrome_open. Omit to use the most recent agent tab."}
 REF = {"type": "string", "description": 'Element ref from chrome_read_page or chrome_find, e.g. "e12".'}
-WHY = {"type": "string", "description": 'Short reason shown to the user next to the cursor, e.g. "Opening the export menu". Always include it.'}
+WHY = {"type": "string", "description": 'Short reason shown to the user in the side panel and Activity log, e.g. "Opening the export menu". Always include it.'}
 WHY_REQUIRED = {"type": "string", "description": 'Required. What this step is for, in the user\'s terms, e.g. "Opening the export menu". '
-                "Shown next to the cursor, on approval prompts and in the Activity log."}
+                "Shown on approval prompts, in the side panel and in the Activity log."}
 
 
 def _schema(name, description, props=None, required=None):

@@ -5,7 +5,6 @@
   "description": "Let your Hermes agent drive this Chrome: visible cursor, its own tab group, and a human handoff for CAPTCHAs and logins.",
   "minimum_chrome_version": "116",
   "permissions": ["tabs", "tabGroups", "debugger", "scripting", "storage", "alarms", "sidePanel", "contextMenus", "notifications", "favicon", "webNavigation"],
-  "web_accessible_resources": [{ "resources": ["icons/avatar.png"], "matches": ["<all_urls>"] }],
   "commands": {
     "toggle-pause": { "suggested_key": { "default": "Alt+Shift+Period" }, "description": "Pause or resume the agent" }
   },
@@ -14,7 +13,7 @@
   "background": { "service_worker": "background.js" },
   "content_scripts": [{ "matches": ["<all_urls>"], "js": ["content.js"], "run_at": "document_idle" }],
   "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
-  "action": { "default_title": "Hermes Chrome: click to chat, right-click for settings",
+  "action": { "default_title": "Hermes Chrome",
     "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png" } },
   "options_page": "options.html"
 }
