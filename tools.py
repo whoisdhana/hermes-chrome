@@ -6,7 +6,7 @@ import json
 import time
 from pathlib import Path
 
-from . import extract, recordings, telegram_note
+from . import extract, recordings
 from .hub import BrowserUnavailable
 
 TAB = {"type": "integer", "description": "Tab id from chrome_tabs / chrome_open. Omit to use the most recent agent tab."}
@@ -44,7 +44,8 @@ TOOLS = [
         {"tabId": TAB, "query": {"type": "string"}}, ["query"])),
     ("chrome_text", "get_text", _schema("chrome_text", "Visible text of the page (truncated).",
         {"tabId": TAB, "maxChars": {"type": "integer"}})),
-    ("chrome_screenshot", "screenshot", _schema("chrome_screenshot", "Screenshot of the visible part of the tab.", {"tabId": TAB})),
+    ("chrome_screenshot", "screenshot", _schema("chrome_screenshot", "Screenshot of the visible part of the tab, saved on the Hermes machine. "
+        "Returns its path as MEDIA:<path>; look at it with your vision tool when you need to see it.", {"tabId": TAB})),
     ("chrome_click", "click", _schema("chrome_click",
         "Click an element by ref (or viewport x,y). Risky clicks (pay, delete, send, post) ask the user in the browser first.",
         {"tabId": TAB, "ref": REF, "x": {"type": "number"}, "y": {"type": "number"},
@@ -83,7 +84,8 @@ TOOLS = [
         "then with done=N as you finish each step.",
         {"steps": {"type": "array", "items": {"type": "string"}}, "done": {"type": "integer"}})),
     ("chrome_report", "report", _schema("chrome_report",
-        "Finish a browser task: send the user a short summary with snapshots of the last steps. Call once at the end of multi-step work.",
+        "Finish a browser task: marks it done in the user's browser and returns step counts. Call once at the end of multi-step "
+        "work, then tell the user the summary in your reply.",
         {"summary": {"type": "string"}}, ["summary"])),
     ("chrome_replay", None, _schema("chrome_replay",
         "Run a browser workflow the user recorded (a skill under browser-recordings). Omit name to list them. vars fills {{placeholders}}.",
@@ -118,19 +120,6 @@ for _name, _method, _schema_ in TOOLS:
         _schema_["parameters"]["properties"]["browser"] = BROWSER
 
 
-def _ping_handoff(hub, args: dict) -> None:
-    """Telegram: the step the user has to do, with a screenshot of the tab, so they can decide without opening the laptop."""
-    text = f"✋ {hub.agent_name} needs you in Chrome: {args.get('message', '')}\nSolve it in the browser; I continue by myself once it is done."
-    try:
-        shot = hub.call("screenshot", {**{k: v for k, v in args.items() if k in ("tabId", "browser")}, "forPing": True}, 20)
-        data = (shot or {}).get("image", {}).get("data") if isinstance(shot, dict) else None
-        if data and telegram_note.send_report(text, [(base64.b64decode(data), "The page now")]):
-            return
-    except Exception:
-        pass
-    telegram_note.notify(text)
-
-
 def make_handler(hub, tool: str, method: str | None):
     def handler(args: dict, **kwargs):
         try:
@@ -147,8 +136,6 @@ def make_handler(hub, tool: str, method: str | None):
                 return extract.run_extract(hub, args)
             if tool == "chrome_export":
                 return extract.run_export(hub, args)
-            if tool == "chrome_handoff":  # also ping the user where they talk to the agent, with what the page looks like
-                _ping_handoff(hub, args)
             timeout = ((int(args.get("timeoutSec") or 600) + 15) if tool == "chrome_handoff"
                        else min(900, 120 + 30 * len(args.get("actions") or [])) if tool == "chrome_batch" else 60)
             result = hub.call(method, args, timeout)
@@ -159,7 +146,7 @@ def make_handler(hub, tool: str, method: str | None):
         if tool == "chrome_screenshot" and isinstance(result, dict) and result.get("image"):
             return _screenshot_result(hub, result)
         if tool == "chrome_report" and isinstance(result, dict):
-            return _report_result(hub, args, result)
+            return json.dumps({**json.loads(result.get("text") or "{}"), "note": "Tell the user the summary in your reply."})
         if isinstance(result, dict) and "text" in result:
             return result["text"]
         return json.dumps(result)
@@ -180,17 +167,6 @@ def _replay(hub, args: dict) -> str:
     return hub.call("replay", {"name": data["name"], "steps": steps, "browser": args.get("browser")}, 120 + 45 * len(steps))["text"]
 
 
-def _report_result(hub, args: dict, result: dict) -> str:
-    stats = json.loads(result.get("text") or "{}")
-    shots = [(base64.b64decode(i["data"].split(",", 1)[1]), i.get("label", "")) for i in result.get("images") or []]
-    line = f"✅ {args.get('summary', 'Done')}\n{stats.get('steps', 0)} steps in {stats.get('seconds', 0)} s"
-    if stats.get("handoffs"):
-        line += f", {stats['handoffs']} handed to you"
-    sent = telegram_note.send_report(line, shots)
-    return json.dumps({**stats, "sent_to_telegram": sent,
-                       "note": "Report delivered with snapshots." if sent else "Tell the user the summary in your reply."})
-
-
 def _screenshot_result(hub, result: dict):
     folder = Path(hub.ctx.state.data_dir) / "screenshots"
     folder.mkdir(parents=True, exist_ok=True)
@@ -198,9 +174,4 @@ def _screenshot_result(hub, result: dict):
     path.write_bytes(base64.b64decode(result["image"]["data"]))
     for old in sorted(folder.glob("*.jpg"))[:-50]:  # keep the last 50
         old.unlink(missing_ok=True)
-    text = f"{result.get('text', '')}\nMEDIA:{path}"
-    try:  # show the image to the model natively when the route supports it (same path MCP image results use)
-        from tools.mcp_tool_content import _mcp_result_with_native_images
-        return _mcp_result_with_native_images(text, [str(path)])
-    except Exception:
-        return text
+    return f"{result.get('text', '')}\nMEDIA:{path}"

@@ -1,5 +1,6 @@
 name: hermes-chrome
-version: 0.8.6
+version: "0.9.0"
+requires_hermes: ">=0.21.3"
 description: Let the agent use your real Chrome (visible cursor, its own tab group, human handoff) via the Hermes Chrome extension. Pair with /chrome pair.
 author: Dhana
 provides_tools:

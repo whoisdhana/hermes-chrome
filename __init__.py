@@ -9,10 +9,8 @@ import re
 import time
 from pathlib import Path
 
-import threading
-
-from . import recordings, telegram_note
-from .hub import CODE_TTL, EXTENSION_DOWNLOAD, PLUGIN_VERSION, Hub, default_port, version_tuple
+from . import recordings
+from .hub import CODE_TTL, PLUGIN_VERSION, Hub, default_port, version_tuple
 from .tools import TOOLS, make_handler
 
 HELP = """/chrome_pair      new pairing code for the Hermes Chrome extension (5 minutes, one use)
@@ -100,7 +98,6 @@ def register(ctx):
         offline_message=ctx.get_config("offline_message", default="Browser not available"),
         agent_name=ctx.get_config("agent_name", default=None) or ("Hermes" if profile in ("default", "custom") else profile.title()),
         profile=profile,
-        remote_update=bool(ctx.get_config("remote_update", default=True)),
     )
     hub.start()
 
@@ -126,13 +123,10 @@ def register(ctx):
             stale = [b for b in st.get("browsers") or [] if version_tuple(b.get("extension")) and PLUGIN_VERSION
                      and version_tuple(b["extension"]) < version_tuple(PLUGIN_VERSION) and (b["id"], b["extension"]) not in told_update]
             told_update.update((b["id"], b["extension"]) for b in stale)
-            def how(b):  # 0.8.0+ can update itself from the side panel; older copies need the manual way
-                if version_tuple(b["extension"]) >= (0, 8, 0):
-                    return "press Update now in its Hermes Chrome side panel (or, if that copy is loaded from a git checkout, git pull and press reload in the extensions page)"
-                return (f"press reload on Hermes Chrome in that browser's extensions page (enough if it loads from a git checkout); otherwise download "
-                        f"{EXTENSION_DOWNLOAD}, unzip it over the old extension folder and reload")
             update = "".join(f" Tell the user once, briefly: the Hermes Chrome extension in their browser \"{b['name']}\" is {b['extension']}, "
-                             f"older than this plugin ({PLUGIN_VERSION}); to update it, {how(b)}." for b in stale[:3])
+                             f"older than this plugin ({PLUGIN_VERSION}); to update it, replace that extension's folder with the "
+                             "extension/ folder of this plugin version and press reload on Hermes Chrome in that browser's extensions "
+                             "page (pairing and settings stay)." for b in stale[:3])
             return (f"[hermes-chrome] The user's own Chrome{device} (your tab group: {hub.agent_name}). For anything in a "
                     "web browser use the chrome_* tools (load them with tool_search query \"chrome\"), not the built-in browser "
                     "tools. For multi-step tasks: chrome_plan first, a short `why` on every action, chrome_report at the end. "
@@ -149,10 +143,6 @@ def register(ctx):
     # purpose: the gateway maps /chrome_pair to chrome-pair before looking up plugin commands.
     ctx.register_command("chrome-pair", lambda raw: command(hub, "pair"), description="Pairing code for the Hermes Chrome extension")
 
-    def _resume_deletes():  # owner only: clean up pairing messages left by a restart
-        if hub.ready.wait(30) and hub.owner:
-            telegram_note.resume(ctx.state)
-    threading.Thread(target=_resume_deletes, daemon=True).start()
     ctx.register_cli_command("chrome", "Pair and manage the Hermes Chrome extension", setup_fn=_setup_cli,
                              handler_fn=lambda args: print(command(hub, " ".join([args.action, *args.rest]), cli=True)))
     ctx.register_skill("browser", Path(__file__).parent / "skill")
@@ -183,9 +173,6 @@ def command(hub: Hub, raw: str, cli: bool = False) -> str:
             code = hub.pair_code()
         except Exception as e:
             return f"Could not create a pairing code: {e}"
-        where = None if cli else telegram_note.current_chat()
-        if where and telegram_note.send_code(hub.ctx.state, where, code, CODE_TTL):
-            return f"Pairing code sent. It works once and the message deletes itself in {CODE_TTL // 60} minutes."
         return (f"Pairing code (one use, valid {CODE_TTL // 60} minutes):\n\n{code}\n\n"
                 "Paste it into the Hermes Chrome extension: right-click the icon → Settings → Pair.")
     if action == "status":

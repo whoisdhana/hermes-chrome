@@ -20,6 +20,16 @@ from pathlib import Path
 from aiohttp import ClientSession, web
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# Hermes' public secret route (agent.secret_scope.get_secret), faked: tests put values in SECRETS, never in a .env.
+SECRETS = {}
+_agent = type(sys)("agent")
+_agent.__path__ = []
+_secret_scope = type(sys)("agent.secret_scope")
+_secret_scope.get_secret = lambda name, default=None: SECRETS.get(name, default)
+_agent.secret_scope = _secret_scope
+sys.modules.setdefault("agent", _agent)
+sys.modules.setdefault("agent.secret_scope", _secret_scope)
 # The repo root is the plugin package (that is how `hermes plugins install` lays it out); load it as hermes_chrome.
 _spec = importlib.util.spec_from_file_location("hermes_chrome", ROOT / "__init__.py", submodule_search_locations=[str(ROOT)])
 plugin = importlib.util.module_from_spec(_spec)
@@ -190,6 +200,11 @@ class PluginTest(unittest.TestCase):
         self.assertTrue(wait_for(lambda: self._hub().connected))
         type(self).ext, type(self).device = ext, paired
 
+    def test_3b_pair_command_for_menus(self):
+        out = self.ctx.commands["chrome-pair"]("")  # argument-free form for chat menus: the code comes back in the reply
+        self.assertIn("valid 5 minutes", out)
+        self.assertRegex(out, r"HC-[2-9A-Z]{4}-[2-9A-Z]{4}@")
+
     def test_4_tools_hint_and_status(self):
         ext = self.ext
         self.assertEqual(self.ctx.tools["chrome_open"]({"url": "https://example.com"}), "did tab_open")
@@ -242,11 +257,14 @@ class PluginTest(unittest.TestCase):
             await runner.setup()
             await web.TCPSite(runner, "127.0.0.1", 18642).start()
         asyncio.run_coroutine_threadsafe(start(), loop).result(5)
-        os.environ.update(API_SERVER_PORT="18642", API_SERVER_KEY="k-test")
         skills = Path(self.tmp) / "home" / "skills" / "research" / "deep-dive"
         skills.mkdir(parents=True)
         (skills / "SKILL.md").write_text("---\nname: deep-dive\ndescription: Research a topic\n---\nbody")
         os.environ["HERMES_HOME"] = str(Path(self.tmp) / "home")
+        (Path(self.tmp) / "home" / ".env").write_text("API_SERVER_KEY=from-dotenv\nAPI_SERVER_PORT=1\n")
+        chat = importlib.import_module("hermes_chrome.chat")
+        self.assertEqual(chat.api_target(), ("http://127.0.0.1:8642", ""), "never reads the profile's .env")
+        SECRETS.update(API_SERVER_PORT="18642", API_SERVER_KEY="k-test")
 
         ext = self.ext
         ext.run(ext.send({"type": "chat_meta"}))
@@ -269,7 +287,7 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(body["input"][0]["content"][1], {"type": "input_image", "image_url": "data:image/png;base64,AAAA"})
 
     def test_6b_teach_save_replay_report(self):
-        ext, tn = self.ext, importlib.import_module("hermes_chrome.telegram_note")
+        ext = self.ext
         steps = [{"action": "open", "url": "https://ads.example.com/"},
                  {"action": "type", "target": {"name": "Report date", "css": "#d"}, "value": "{{date}}"},
                  {"action": "type", "target": {"name": "Password", "css": "#p"}, "secret": True, "value": "hunter2"},
@@ -307,22 +325,13 @@ class PluginTest(unittest.TestCase):
         time.sleep(5.1)
         self.assertIn("Recorded workflows (run with chrome_replay): ads-weekly-export", self.ctx.hooks["pre_llm_call"](session_id="s"))
 
-        calls = []
-        orig = (tn._bot, tn._multipart, tn.current_chat, tn._token)
-        tn._bot = lambda m, p: calls.append((m, p)) or {"ok": True, "result": {"message_id": 1}}
-        tn._multipart = lambda m, f, files: calls.append((m, f, sorted(files))) or {"ok": True}
-        tn.current_chat = lambda: ("4242", "", "")
-        tn._token = lambda: "t"
-        try:
-            out = json.loads(self.ctx.tools["chrome_report"]({"summary": "Exported the report"}))
-            self.assertEqual((out["steps"], out["sent_to_telegram"]), (4, True))
-            method, fields, files = calls[-1]
-            self.assertEqual((method, files), ("sendMediaGroup", ["p0"]))
-            self.assertIn("Exported the report", fields["media"])
-            self.ctx.tools["chrome_handoff"]({"message": "Solve the CAPTCHA"})
-            self.assertIn("needs you in Chrome: Solve the CAPTCHA", calls[-1][1]["text"])
-        finally:
-            tn._bot, tn._multipart, tn.current_chat, tn._token = orig
+        out = json.loads(self.ctx.tools["chrome_report"]({"summary": "Exported the report"}))
+        self.assertEqual(out["steps"], 4)
+        self.assertIn("Tell the user the summary", out["note"])
+        self.assertNotIn("sent_to_telegram", out)
+        n = len(ext.calls)
+        self.assertEqual(self.ctx.tools["chrome_handoff"]({"message": "Solve the CAPTCHA"}), "did handoff")
+        self.assertEqual([c["method"] for c in ext.calls[n:]], ["handoff"], "the handoff goes to the browser only")
 
     def test_6c_two_browsers_at_once(self):
         main = self.ext
@@ -390,7 +399,9 @@ class UpdateNoticeTest(unittest.TestCase):
         first = ctx.hooks["pre_llm_call"](session_id="s")
         self.assertIn("older than this plugin", first)
         self.assertIn('browser "Old Chrome"', first, "names the browser it means")
-        self.assertIn(hub_mod.EXTENSION_DOWNLOAD, first)
+        self.assertIn("extension/ folder of this plugin version", first)
+        self.assertNotIn("github.com", first, "no download from outside the pinned plugin")
+        self.assertNotIn("pluginUpdate", welcome, "the plugin offers no self-update")
         self.assertNotIn("older than this plugin", ctx.hooks["pre_llm_call"](session_id="s"), "said once, not every turn")
 
 
@@ -586,11 +597,11 @@ session_reset:
                 os.environ["HERMES_HOME"] = old
 
 
-class PluginSelfUpdateTest(unittest.TestCase):
-    """A paired browser asks the plugin to update itself; the plugin runs `hermes plugins update` and restarts."""
+class NoSelfUpdateTest(unittest.TestCase):
+    """Catalog rule 3: a paired browser cannot make the plugin update or restart itself."""
     PORT = 18791
 
-    def test_update_from_browser(self):
+    def test_update_request_is_ignored(self):
         ctx = FakeCtx(tempfile.mkdtemp(), {"port": self.PORT, "advertise_host": "127.0.0.1"})
         plugin.register(ctx)
         hub = ctx.tools["chrome_open"].__closure__[0].cell_contents
@@ -598,37 +609,48 @@ class PluginSelfUpdateTest(unittest.TestCase):
         code = next(l for l in ctx.commands["chrome"]("pair").splitlines() if l.startswith("HC-"))
         ext = FakeExtension(self.PORT)
         p = ext.run(ext.pair(code))
-        self.assertTrue(ext.run(ext.connect(p["deviceId"], p["deviceKey"]))["pluginUpdate"])
-        ran, restarted = [], []
-        result = {"code": 0, "out": "Updated hermes-chrome"}
+        self.assertNotIn("pluginUpdate", ext.run(ext.connect(p["deviceId"], p["deviceKey"])))
+        ext.run(ext.send({"type": "update_plugin", "id": "u1"}))
+        ext.run(ext.send({"type": "ping"}))
+        self.assertTrue(wait_for(lambda: hub.connected))
+        time.sleep(0.5)
+        self.assertFalse(any(e.get("type") == "plugin_update" for e in ext.events), "no reply: there is no updater")
+        for name in ("_update_plugin", "_hermes_cmd", "_restart_soon", "remote_update"):
+            self.assertFalse(hasattr(hub, name), name)
 
-        async def fake_run(*args, timeout=300):
-            ran.append(args)
-            return result["code"], result["out"]
-        hub._hermes_cmd = fake_run
-        hub._restart_soon = lambda: restarted.append(True)
-        orig = hub_mod._plugin_version
-        hub_mod._plugin_version = lambda: "99.0.0"
+
+class CatalogRulesTest(unittest.TestCase):
+    """Static checks for the catalog build: no updater, no private Hermes imports, no credential-file or Telegram access."""
+
+    def test_tree_and_sources(self):
+        self.assertFalse((ROOT / "updater").exists(), "no self-updater in the catalog tree")
+        sources = {p.name: p.read_text() for p in ROOT.glob("*.py")}
+        for name, text in sources.items():
+            for bad in ("gateway.session_context", "tools.mcp_tool_content", "api.telegram.org", '".env"', "/ \".env\"",
+                        "auth.json", "TELEGRAM_BOT_TOKEN", "environ.get(\"API_SERVER_KEY", "plugins\", \"update"):
+                self.assertNotIn(bad, text, f"{name} contains {bad}")
+        self.assertIn("from agent.secret_scope import get_secret", sources["chat.py"])
+        ext = "".join(p.read_text() for p in (ROOT / "extension").glob("*.*") if p.suffix in (".js", ".html", ".json"))
+        for bad in ("sendNativeMessage", "nativeMessaging", "install.sh", "update_plugin", "releases/latest"):
+            self.assertNotIn(bad, ext)
+
+    def test_versions_agree(self):
+        manifest = (ROOT / "plugin.yaml").read_text()
+        self.assertIn('version: "0.9.0"', manifest)
+        self.assertRegex(manifest, r'(?m)^requires_hermes: ">=\d+\.\d+\.\d+"$')
+        self.assertEqual(hub_mod.PLUGIN_VERSION, "0.9.0", "quoted YAML version parses without the quotes")
+        self.assertEqual(json.loads((ROOT / "extension" / "manifest.json").read_text())["version"], hub_mod.PLUGIN_VERSION)
+
+    def test_unscoped_secret_fails_closed(self):
+        chat = importlib.import_module("hermes_chrome.chat")
+        orig = _secret_scope.get_secret
+        def raises(name, default=None):
+            raise RuntimeError("no profile secret scope")
+        _secret_scope.get_secret = raises
         try:
-            def ask(i):
-                ext.run(ext.send({"type": "update_plugin", "id": i}))
-                self.assertTrue(wait_for(lambda: any(e.get("type") == "plugin_update" and e.get("id") == i for e in ext.events), 5))
-                return next(e for e in ext.events if e.get("id") == i)
-            r = ask("u1")
-            self.assertEqual((r["ok"], r["to"], r.get("same")), (True, "99.0.0", None))
-            self.assertEqual(ran[-1], ("plugins", "update", "hermes-chrome"))
-            self.assertEqual(restarted, [True], "restarts to load the new code")
-            result.update(code=1, out="network unreachable")
-            r = ask("u2")
-            self.assertFalse(r["ok"])
-            self.assertIn("network unreachable", r["error"])
-            hub.remote_update = False
-            r = ask("u3")
-            self.assertFalse(r["ok"])
-            self.assertIn("turned off", r["error"])
-            self.assertEqual(len(restarted), 1)
+            self.assertEqual(chat.api_target(), ("http://127.0.0.1:8642", ""), "chat reports NO_API instead of guessing")
         finally:
-            hub_mod._plugin_version = orig
+            _secret_scope.get_secret = orig
 
 
 class PairingLimitTest(unittest.TestCase):
@@ -702,41 +724,6 @@ class TunnelTest(unittest.TestCase):
         for h in ({"Cf-Connecting-Ip": "203.0.113.5"}, {"X-Forwarded-For": "203.0.113.5"}):
             self.assertEqual(run_async(get("/rpc", {**secret, **h})), 403, f"/rpc through a tunnel ({h})")
             self.assertEqual(run_async(get("/health", h)), 403, f"/health through a tunnel ({h})")
-
-
-class TelegramPairTest(unittest.TestCase):
-    """/chrome_pair on Telegram: the plugin sends the code itself and deletes the message later."""
-
-    def test_sends_code_and_deletes_it(self):
-        tn = importlib.import_module("hermes_chrome.telegram_note")
-        calls = []
-        orig = (tn._bot, tn.current_chat, tn._token)
-        tn._bot = lambda method, payload: calls.append((method, payload)) or {"ok": True, "result": {"message_id": 555}}
-        tn.current_chat = lambda: ("4242", "", "77")
-        tn._token = lambda: "t"
-        try:
-            ctx = PluginTest.ctx
-            self.assertIn("chrome-pair", ctx.commands)
-            out = ctx.commands["chrome-pair"]("")
-            self.assertIn("deletes itself in 5 minutes", out)
-            self.assertNotIn("HC-", out, "the code is only in the self-deleting message")
-            method, payload = calls[0]
-            self.assertEqual((method, payload["chat_id"]), ("sendMessage", "4242"))
-            self.assertRegex(payload["text"], r"<code>HC-[2-9A-Z]{4}-[2-9A-Z]{4}@")
-            self.assertEqual(payload["reply_parameters"]["message_id"], 77)
-            pending = ctx.state.get("pending_deletes")
-            self.assertEqual(pending[-1]["message_id"], 555)
-            self.assertAlmostEqual(pending[-1]["at"] - time.time(), 300, delta=5)
-            # pretend 5 minutes passed
-            ctx.state.set("pending_deletes", [dict(pending[-1], at=time.time() - 1)])
-            tn._delete_due(ctx.state)
-            self.assertEqual(calls[-1], ("deleteMessage", {"chat_id": "4242", "message_id": 555}))
-            self.assertEqual(ctx.state.get("pending_deletes"), [])
-            # not on Telegram: the code comes back as plain text
-            tn.current_chat = lambda: None
-            self.assertIn("valid 5 minutes", ctx.commands["chrome-pair"](""))
-        finally:
-            tn._bot, tn.current_chat, tn._token = orig
 
 
 class ExtractExportTest(unittest.TestCase):

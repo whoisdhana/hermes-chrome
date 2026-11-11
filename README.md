@@ -19,7 +19,7 @@ Setup is two steps: enable the plugin, then send `/chrome pair` and paste the co
 Install Hermes Chrome for me: read https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/AGENT_INSTALL.md and follow it.
 ```
 
-**Updating:** the extension shows an **↑** badge and a banner when something is out of date. If the **extension** is older, press **Update now** (after the one-time update helper, see Updating below). If the **Hermes plugin** is older, press **Update Hermes plugin**: it updates itself on your Hermes machine and restarts. You can still ask your agent: `Update Hermes Chrome: read https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/AGENT_INSTALL.md and follow it.`
+**Updating:** `hermes plugins update hermes-chrome` on the Hermes machine, then reload the extension from the updated `extension/` folder. The extension shows an **↑** badge and a banner when it and the plugin are out of step; it never updates anything itself. See [Updating](#updating).
 
 The extension connects out to Hermes, so your laptop needs no open ports. When the laptop is asleep or Chrome is closed, the tools return one plain message (default `Browser not available`) and the agent tells you instead of guessing.
 
@@ -29,8 +29,8 @@ The extension connects out to Hermes, so your laptop needs no open ports. When t
 - **A reason for every action**: every click, keystroke and key press must carry a short reason ("Opening the date picker"). It appears on approval prompts, in the side panel and in Activity; actions without one are refused.
 - **Takeover**: touch the mouse or keyboard in the agent's tab and it pauses on its own ("You took over… Press ▶ when it can continue"). Pause and resume also from the strip, the side panel, or **⌥⇧.** (Alt+Shift+.).
 - **Tab marker**: the agent's tab is marked next to the address bar (a badge on the toolbar icon: ● working, II paused, ! needs you) and in the tab strip (a coloured dot on the tab's icon).
-- **Needs you**: CAPTCHAs, logins, payments and risky clicks raise a Mac notification and, when you are talking to the agent on Telegram, a message there.
-- **Activity**: the side panel's Activity tab lists every step with a snapshot. At the end of a task the agent sends a short report with the last snapshots to Telegram.
+- **Needs you**: CAPTCHAs, logins, payments and risky clicks raise a desktop notification and a "needs you" banner in the tab.
+- **Activity**: the side panel's Activity tab lists every step with a snapshot. At the end of a task the agent tells you a short summary in the chat you talk to it in.
 
 ## Teach mode: record a task once, replay it any time
 
@@ -52,7 +52,7 @@ Click the toolbar icon to open it. Right-click the icon for **Settings** and **S
 - **Slash commands**: type `/` for `/new`, `/model sonnet`, `/models`, `/stop`, `/screenshot`, `/tab off`, `/clear`, `/help`, and every skill of your agent (`/deep-dive …`).
 - **Stop** cancels the turn and blocks browser actions for 20 seconds.
 
-Chat uses the Hermes API server of the same profile (`API_SERVER_ENABLED=true` and `API_SERVER_KEY` in its `.env`). The plugin reads the key itself; it stays on the server.
+Chat uses the Hermes API server of the same profile. Turn it on with `API_SERVER_ENABLED=true` and an `API_SERVER_KEY` for that profile (Hermes keeps it with the profile's other secrets), and restart the gateway. The plugin gets the key only through Hermes' secret route (`agent.secret_scope.get_secret`), never by reading `.env` or any other file, and talks to `API_SERVER_HOST:API_SERVER_PORT` (default `127.0.0.1:8642`). The key stays on the server. If Hermes cannot hand the key to the plugin (for example a multi-profile gateway without a secret scope for this thread), the panel says side-panel chat is unavailable; browser control from your other chats keeps working.
 
 ## Why not the built-in options?
 
@@ -68,13 +68,13 @@ Chat uses the Hermes API server of the same profile (`API_SERVER_ENABLED=true` a
 | `chrome_tabs`, `chrome_open`, `chrome_close` | Tabs inside the agent tab group |
 | `chrome_navigate` | Go to a URL, or `back` / `forward` |
 | `chrome_read_page`, `chrome_find`, `chrome_text` | Page outline with element refs (`e12`), search, visible text |
-| `chrome_screenshot` | The visible tab, shown to the model as an image |
+| `chrome_screenshot` | The visible tab, saved in the plugin's data folder; returns the path (`MEDIA:<path>`) for the agent's vision tool or to send on |
 | `chrome_click`, `chrome_type`, `chrome_key`, `chrome_scroll` | Real (trusted) input through the Chrome debugger API, with cursor animation |
 | `chrome_batch` | Up to 20 steps in one call (fill a form and submit), each with the same checks as a single call; stops at the first error or when the page changes |
 | `chrome_wait` | Pause up to 15 s |
 | `chrome_handoff` | Ask you to do a step (CAPTCHA, login, payment) and wait for Done |
 | `chrome_eval` | Run JavaScript in the page; off unless you enable it |
-| `chrome_plan`, `chrome_report` | Plan strip and end-of-task report |
+| `chrome_plan`, `chrome_report` | Plan strip and end of task (closes extra tabs, returns step counts) |
 | `chrome_replay` | Run a recorded workflow, with variables |
 | `chrome_extract` | Structured data from a page, or one record per list item (`multiple: true`). Your own model fills the fields; every value keeps its source URL, capture time, logged-in guess and the exact quote, and values whose quote is not on the page are dropped. Records collect in a named dataset |
 | `chrome_export` | Write a dataset to Markdown (default: table plus a Sources section), CSV (formula-safe) or JSON in the plugin's data folder, and return the path |
@@ -97,7 +97,7 @@ Read [SECURITY.md](SECURITY.md) for exactly what data is stored where and what l
 - **New sites**: the agent can read any page that is not blocked, but its first click or keystroke on a site you have not approved asks **Decline / Allow once / Always allow**. Allow once lasts until the task ends; always-allowed sites are listed (and removable) in Settings.
 - **Ask me first**: on these hosts every click, keystroke and form submit waits for your OK. Starts with webmail, payment apps, banks and brokers. Both lists are editable in Settings.
 - **Risky clicks** (pay, buy, delete, send, publish, post…) show an Allow / Deny banner first. Deny is the default focus.
-- **Pairing**: codes are single use, expire after 5 minutes (on Telegram the code message deletes itself then), and five wrong attempts cancel all open codes. Each browser gets its own key; Hermes stores only its hash. `/chrome devices` lists them, `/chrome revoke <name>` cuts one off immediately. Nothing secret ever goes in a URL.
+- **Pairing**: codes are single use, expire after 5 minutes, and five wrong attempts cancel all open codes. The code comes back as the reply to `/chrome pair`, so it stays in that chat's history; it is useless once used or expired. Each browser gets its own key; Hermes stores only its hash. `/chrome devices` lists them, `/chrome revoke <name>` cuts one off immediately. Nothing secret ever goes in a URL.
 - Use Tailscale, a LAN, or an HTTPS tunnel with `public_url` (see Setup) between laptop and server; never expose the raw port to the internet.
 - The agent never solves CAPTCHAs; it hands them to you.
 - **Stop agent** (right-click the toolbar icon) disconnects immediately.
@@ -109,9 +109,11 @@ Chrome shows a "started debugging this browser" bar while the agent has a tab at
 ### 1. Plugin (on the machine running Hermes)
 
 ```bash
-hermes plugins install whoisdhana/hermes-chrome --enable
-# or: git clone https://github.com/whoisdhana/hermes-chrome ~/.hermes/plugins/hermes-chrome && hermes plugins enable hermes-chrome
+hermes plugins install hermes-chrome --enable          # from the Hermes plugin catalog, at the commit it pins
+# or straight from this repository: hermes plugins install whoisdhana/hermes-chrome --enable
 ```
+
+Needs Hermes 0.21.3 or newer.
 
 Restart the gateway. The plugin listens on port 8798 on loopback and, if present, the machine's Tailscale address (the LAN only with `allow_lan: true`).
 
@@ -131,14 +133,12 @@ plugins:
 
 ### 2. Extension (on your laptop)
 
-1. Download `hermes-chrome-extension.zip` from [Releases](https://github.com/whoisdhana/hermes-chrome/releases/latest) and unzip it (or use the `extension/` folder of a clone).
-2. `chrome://extensions` (Brave: `brave://extensions`) → enable **Developer mode** → **Load unpacked** → pick the unzipped folder.
+1. Take the `extension/` folder of the plugin Hermes installed (`~/.hermes/plugins/hermes-chrome/extension`, or `<profile home>/plugins/hermes-chrome/extension` for a named profile). If the browser is on another computer, copy that folder over. Using the plugin's own copy keeps the extension at the same version as the plugin.
+2. `chrome://extensions` (Brave: `brave://extensions`) → enable **Developer mode** → **Load unpacked** → pick that folder.
 3. In Telegram pick `/chrome_pair` from the menu (any channel: `/chrome pair`; terminal: `hermes chrome pair`).
 4. Right-click the extension icon → **Settings**, paste the code under **Pair**. The badge turns green.
 
 If Hermes runs on the same computer, the short code alone works (`HC-7Q2K-9XPM`).
-
-Optional, once: install the [update helper](#updating) so later updates are one click.
 
 ### Reach Hermes from anywhere (no Tailscale)
 
@@ -186,20 +186,28 @@ Point your MCP client at `http://127.0.0.1:8798/mcp`. Variables: `HC_PORT`, `HC_
 
 ## Updating
 
-When your Hermes plugin is newer than the extension, the toolbar icon shows **↑** and the side panel (and Settings) show an "update available" banner.
+Hermes Chrome has no self-updater. Updates arrive only through Hermes:
 
-1. **Plugin**: send your agent `Update Hermes Chrome: read https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/AGENT_INSTALL.md and follow it.`
-2. **Extension**: press **Update now** in the banner. It downloads the latest release, checks it, replaces the extension's files and reloads the extension. Pairing, settings and recordings stay.
+1. **Plugin**: on the Hermes machine run `hermes plugins update hermes-chrome` (it moves to the commit the catalog pins), then restart the gateway.
+2. **Extension**: replace the extension's folder with the updated `extension/` folder of the plugin (or, if Chrome loads it straight from the plugin folder on the same computer, nothing to copy) and press reload on Hermes Chrome in `chrome://extensions`. Pairing, settings and recordings stay.
 
-**Update now** needs the small update helper, installed once on the computer that runs the browser (macOS or Linux, Python 3, no admin rights). An unpacked extension cannot rewrite its own files, so the helper does it for it. Run this after you have loaded the extension:
+When the two are out of step, the toolbar icon shows **↑** and the side panel and Settings say which side is older. That notice is information only: it offers no download and no update button.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/updater/install.sh | bash
-```
+## What this plugin does on your machine
 
-It looks for Hermes Chrome in Google Chrome, Chromium, Brave, Microsoft Edge and Arc, puts the helper in `~/.hermes-chrome-updater/` and registers it with each browser that has the extension. Run it again if you load the extension from a different folder. `bash install.sh --dir <folder> --id <extension id>` sets the folder by hand, and `--uninstall` removes everything it added. A folder inside a git clone is skipped: update that with `git pull`. What the helper may do is in [SECURITY.md](SECURITY.md#update-helper).
+Read this before installing. [SECURITY.md](SECURITY.md) has the details.
 
-Without the helper, the banner offers the manual way: **Download** the zip, unzip it over your current extension folder, and press **Reload extension**. The first update to a version with **Update now** is always manual, because older versions do not have it.
+- **Listens on the network.** The gateway that loads the plugin opens an HTTP + WebSocket listener on port 8798 (one port per profile) on `127.0.0.1`, and also on the machine's Tailscale address when Tailscale is up, or the LAN address with `allow_lan: true`. `/ext` is the extension's socket, `/rpc` lets other Hermes processes of the same profile reach it (loopback only, guarded by a per-profile secret in plugin state), `/health` answers `{"ok": true}` to anyone who can reach the listener (not through a tunnel).
+- **Pairing with tokens.** A browser joins only with a single-use, 5-minute pairing code from `/chrome pair`; it then gets its own device key, of which the plugin stores only a SHA-256 hash. Five wrong codes pause pairing. `/chrome revoke` cuts a browser off.
+- **Exposure is your choice.** Without settings the listener is reachable from this machine and your tailnet. `allow_lan: true` exposes plain `ws://` to the local network. `public_url` is for an HTTPS tunnel you run yourself (Cloudflare Tunnel, Tailscale Funnel, a reverse proxy); the plugin then listens on loopback only, and requests carrying proxy headers reach nothing but `/ext`. Never forward the raw port to the internet.
+- **Runs one shell command.** At startup it runs `tailscale ip -4` (3-second timeout) to find the Tailscale address. Nothing else is executed; there is no `hermes plugins update` or restart triggered from the browser.
+- **Calls your model.** The action check sends the proposed action, its stated reason, the page URL and your latest message to your own configured model through Hermes (`ctx.llm`), before risky clicks and submits (turn off in the extension's Settings). `chrome_extract` sends page text to the same model. Both use your provider and your quota.
+- **No Telegram or other third-party calls.** The plugin itself only talks to your browser, to this profile's own Hermes API server at `API_SERVER_HOST:API_SERVER_PORT` (default `127.0.0.1:8642`, side-panel chat), and to your model through Hermes. What the agent does with tool results (sending them to your chat platform) is ordinary Hermes behaviour.
+- **Secrets only through Hermes.** It reads `API_SERVER_KEY` (plus `API_SERVER_HOST` / `API_SERVER_PORT`) only with Hermes' `get_secret`; it never opens `.env`, `auth.json` or other credential files. It reads the profile's `config.yaml` (only its own `plugins` entry) and lists the profile's `skills/` folder for the side panel's `/` menu.
+- **Runs JavaScript only if you allow it.** `chrome_eval` is off until you enable **Run JavaScript in pages** in the extension's Settings, and never runs on "Ask me first" sites.
+- **Writes files on the Hermes machine.** Screenshots (last 50), side-panel attachments (kept 7 days), extraction datasets and exports in the plugin's data folder (`<profile home>/plugin-data/hermes-chrome/`), and recorded workflows as skills in `<profile home>/skills/browser-recordings/`.
+- **Long-running background work.** The listener runs on a background thread for the life of the Hermes process.
+- **No telemetry.** No analytics, crash reports or usage data are sent anywhere.
 
 ## Development
 

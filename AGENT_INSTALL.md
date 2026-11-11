@@ -4,7 +4,7 @@ You are a Hermes agent. Your user asked you to install or update Hermes Chrome s
 
 If you run as a named profile (not the default one), put `-p <your profile>` right after `hermes` in every command below.
 
-**Updating?** If Hermes Chrome is already installed and the user asked to update it: do step 1 (it updates the plugin), skip steps 2 to 4 (their settings stay), do step 5, and send the **update checklist** instead of the install checklist. Then do step 6 if the update helper is not installed yet. Report the old and new version (`hermes plugins list` before and after).
+**Updating?** If Hermes Chrome is already installed and the user asked to update it: do step 1 (it updates the plugin), skip steps 2 to 4 (their settings stay), do step 5, and send the **update checklist** instead of the install checklist. Report the old and new version (`hermes plugins list` before and after).
 
 ## 1. Install or update the plugin
 
@@ -12,7 +12,7 @@ If you run as a named profile (not the default one), put `-p <your profile>` rig
 hermes plugins list
 ```
 
-- Not listed: `hermes plugins install whoisdhana/hermes-chrome --enable --yes-deps`
+- Not listed: `hermes plugins install hermes-chrome --enable --yes-deps` (from the plugin catalog; needs Hermes 0.21.3 or newer)
 - Listed but disabled: `hermes plugins enable hermes-chrome`
 - Already installed and enabled: `hermes plugins update hermes-chrome`
 
@@ -54,7 +54,14 @@ The chat inside Chrome's side panel needs this profile's API server. Check witho
 grep -cE '^API_SERVER_(ENABLED|KEY)=' "$(hermes config env-path)"
 ```
 
-`2` means it is already on. Otherwise **do not turn it on yourself**: ask the user "Do you also want to chat with me from Chrome's side panel? (yes/no)" and wait. Only after an explicit yes, add `API_SERVER_ENABLED=true` and `API_SERVER_KEY=<a new random 32-byte hex string>` to that `.env` file without showing the key in chat. No answer or no: skip it. Browser control from chat apps works without it.
+`2` means it is already on. Otherwise **do not turn it on yourself**: ask the user "Do you also want to chat with me from Chrome's side panel? (yes/no)" and wait. Only after an explicit yes, set both through Hermes, without showing the key in chat:
+
+```bash
+hermes config set API_SERVER_ENABLED true
+hermes config set API_SERVER_KEY "$(openssl rand -hex 32)" >/dev/null
+```
+
+No answer or no: skip it. Browser control from chat apps works without it. The plugin gets the key from Hermes itself; it never reads `.env`.
 
 ## 5. Restart, then pair
 
@@ -76,11 +83,9 @@ hermes gateway status
 
 > Hermes Chrome is installed. [Gateway: I'm restarting to load it, give me a minute. | Terminal chat: quit this chat with /exit and run `hermes chat` again to load it.]
 >
-> 1. Download the extension: https://github.com/whoisdhana/hermes-chrome/releases/latest/download/hermes-chrome-extension.zip and unzip it.
-> 2. In Chrome open `chrome://extensions`, turn on **Developer mode** (top right), click **Load unpacked** and pick the unzipped folder.
+> 1. The extension is the `extension` folder of the plugin I just installed: [the path from `hermes plugins list` / `<hermes home>/plugins/hermes-chrome/extension`]. [Only if I run on a different computer than your browser: copy that folder to your computer; I can send it to you as a zip.]
+> 2. In Chrome open `chrome://extensions`, turn on **Developer mode** (top right), click **Load unpacked** and pick that folder.
 > 3. Send me `/chrome pair` (on Telegram: `/chrome_pair`). Right-click the new Hermes Chrome icon → **Settings**, paste the code and click **Pair**. The icon turns green.
-> 4. [Only if I run on a different computer than your browser:] Once, for one-click updates later: open Terminal on the computer with the browser and run
->    `curl -fsSL https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/updater/install.sh | bash`
 >
 > Then just ask me to do things in your browser. I work in my own tab group, you'll see my cursor, and I'll hand over to you for logins and CAPTCHAs.
 
@@ -88,29 +93,9 @@ hermes gateway status
 
 > Hermes Chrome is updated from [old version] to [new version]. [Gateway: I'm restarting to load it, give me a minute. | Terminal chat: quit this chat with /exit and run `hermes chat` again.]
 >
-> Now update the extension: open the Hermes Chrome side panel and press **Update now** in the update banner. It updates and reloads itself.
->
-> If the banner shows a Terminal command instead of **Update now**, update by hand this time:
-> 1. Download https://github.com/whoisdhana/hermes-chrome/releases/latest/download/hermes-chrome-extension.zip and unzip it **over your current Hermes Chrome folder** (the one you loaded in `chrome://extensions`), replacing the files.
-> 2. Press **Reload extension** in the banner (or the reload icon on its card in `chrome://extensions`).
-> 3. [Only if I run on a different computer than your browser:] For one-click updates next time, run the command from the banner once in Terminal on the computer with the browser.
+> Now update the extension from the updated plugin's `extension` folder: [same computer: nothing to copy if Chrome loads it from the plugin folder | other computer: replace your Hermes Chrome folder with the new `extension` folder, which I can send you as a zip]. Then press the reload icon on Hermes Chrome in `chrome://extensions`.
 >
 > Your pairing, settings and recordings stay. If Chrome asks to approve new permissions, accept them.
-
-## 6. One-click updates (update helper)
-
-An unpacked extension cannot replace its own files, so **Update now** in the extension uses a small helper installed once on the computer that runs the browser (macOS or Linux). It only downloads the official release, checks its SHA-256 and replaces the extension's own folder.
-
-- **Hermes runs on the same computer as the browser**: install it yourself, but only after the user has done **Load unpacked** (the installer finds the extension in the browser profiles). Check with `chrome_status` or ask the user, then run:
-
-  ```bash
-  curl -fsSL https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/updater/install.sh | bash
-  ```
-
-  It prints the extension folder(s) and browsers it set up. "Hermes Chrome was not found" means the extension is not loaded yet: ask the user to finish the checklist and run it again. Tell the user in one line that **Update now** works from the next update on.
-- **Hermes runs on another computer**: you cannot install it there. Item 4 of the install checklist (or item 3 of the update checklist) gives the user the command.
-
-Running it again is safe (it refreshes the setup); `... | bash -s -- --uninstall` removes it.
 
 ## If something goes wrong
 
@@ -118,4 +103,4 @@ Running it again is safe (it refreshes the setup); `... | bash -s -- --uninstall
 - `/chrome status` shows whether a browser is connected and the address codes point to.
 - Pairing says "Could not reach…": the user's computer cannot reach the address in the code. Recheck step 3.
 - Codes are single use and last 5 minutes; send `/chrome pair` again for a new one.
-- **Update now** fails: the error is shown in the banner and logged in `~/.hermes-chrome-updater/updater.log` on the browser's computer. "not set up for this copy" means the extension was loaded from another folder since the helper was installed: run the installer again.
+- The extension shows **↑** or "plugin is older": the extension and plugin are different versions. Update the side that is older as in the update checklist; the extension never updates itself.

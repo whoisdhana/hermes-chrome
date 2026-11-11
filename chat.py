@@ -15,8 +15,8 @@ from pathlib import Path
 
 from aiohttp import ClientSession, ClientTimeout
 
-NO_API = ("Side-panel chat needs the Hermes API server. Add API_SERVER_ENABLED=true and an API_SERVER_KEY "
-          "to this profile's .env, then restart the gateway.")
+NO_API = ("Side-panel chat needs this profile's Hermes API server: set API_SERVER_ENABLED=true and an API_SERVER_KEY "
+          "for this profile (see the README, Side-panel chat), then restart the gateway.")
 MAX_FILE = 25 * 1024 * 1024
 
 
@@ -24,24 +24,24 @@ def _hermes_home() -> Path:
     return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
 
 
-def _dotenv(name: str) -> str:
+def _secret(name: str) -> str:
+    """A value through Hermes' profile-scoped secret route (catalog rule 11: never from .env or other files). "" when
+    unset, or when Hermes cannot tell which profile is asking (multiplexed gateway without a scope)."""
     try:
-        for line in (_hermes_home() / ".env").read_text().splitlines():
-            if line.startswith(f"{name}="):
-                return line.split("=", 1)[1].strip().strip("'\"")
-    except OSError:
-        pass
-    return ""
+        from agent.secret_scope import get_secret
+        return (get_secret(name) or "").strip()
+    except Exception:
+        return ""
 
 
 def api_target() -> tuple[str, str]:
-    """(base URL, key) of this profile's API server, from the environment or the profile's .env."""
-    host = os.environ.get("API_SERVER_HOST") or _dotenv("API_SERVER_HOST") or "127.0.0.1"
-    if host in ("0.0.0.0", "::", ""):
+    """(base URL, key) of this profile's API server. Host and port are Hermes' own listener settings (default
+    127.0.0.1:8642); the key comes from Hermes' secret route."""
+    host = _secret("API_SERVER_HOST") or "127.0.0.1"
+    if host in ("0.0.0.0", "::"):
         host = "127.0.0.1"
-    port = os.environ.get("API_SERVER_PORT") or _dotenv("API_SERVER_PORT") or "8642"
-    key = os.environ.get("API_SERVER_KEY") or _dotenv("API_SERVER_KEY")
-    return f"http://{host}:{port}", key
+    port = _secret("API_SERVER_PORT") or "8642"
+    return f"http://{host}:{port}", _secret("API_SERVER_KEY")
 
 
 def _save_upload(hub, f: dict) -> str | None:

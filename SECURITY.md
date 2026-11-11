@@ -20,9 +20,9 @@ Guard rails you control (extension **Settings**):
 - **Stop agent** (right-click the toolbar icon) disconnects immediately; clicking or typing in the agent's tab pauses it.
 - The agent never solves CAPTCHAs; it hands them to you.
 
-## Updating the plugin from the browser
+## Updates
 
-When the plugin is older than the extension, the side panel and Settings offer **Update Hermes plugin**. A paired browser can only *ask*: the plugin runs `hermes plugins update hermes-chrome` (the source it was installed from) on its own machine and then restarts its gateway. Nothing from the browser is used as a URL, path or command. Set `remote_update: false` in the plugin settings to turn this off.
+There is no self-updater. Neither the extension nor the plugin downloads or replaces its own files, and a paired browser cannot make Hermes update or restart. Updates come only from `hermes plugins update hermes-chrome` on the Hermes machine (the catalog's pinned commit) and from reloading the extension out of the updated plugin's `extension/` folder. The extension's version notice is information only.
 
 ## Where data lives
 
@@ -31,7 +31,9 @@ When the plugin is older than the extension, the side panel and Settings offer *
 | Pairing: device id and key | Extension storage (`chrome.storage.local`) | Only to your own Hermes when connecting |
 | Device key on the Hermes side | Plugin state, **SHA-256 hash only** | No |
 | Side-panel chat transcript | Extension storage, last 200 messages; **New chat** clears it | Messages go to your Hermes, which sends them to the model provider you configured |
-| Activity snapshots (small JPEGs of each step) | Extension storage, last 60 steps; **Clear timeline** removes them | Only the end-of-task report: up to 3 snapshots to the Telegram chat you talk to the agent in |
+| Activity snapshots (small JPEGs of each step) | Extension storage, last 60 steps; **Clear timeline** removes them | No |
+| Screenshots the agent takes (`chrome_screenshot`) | Plugin data folder on the Hermes machine, last 50 | To the model provider or your chat if the agent uses them |
+| Extraction datasets and exports (`chrome_extract`, `chrome_export`) | Plugin data folder on the Hermes machine | Page text goes to your model provider to fill the fields |
 | Files you attach in the side panel | Saved on the Hermes machine (plugin data folder) | To the model provider if the agent reads them |
 | Recorded workflows (Teach) | On the Hermes machine as skills (`skills/browser-recordings/`) | No |
 | Page content the agent reads | Not stored by this project | Sent to your model provider as part of the conversation, like any other tool output |
@@ -44,33 +46,16 @@ What a recording never contains: passwords, card numbers, CVV, IBAN, SSN, accoun
 - Use it on the same machine, over Tailscale, or behind an HTTPS tunnel. The plugin listens on the LAN only if you set `allow_lan: true`: on a shared network plain `ws://` would let others read the device key. **Do not expose port 8798 to the internet.** That connection is not TLS-encrypted, so it relies on the private network.
 - To reach Hermes over the internet, put it behind an HTTPS tunnel and set `public_url`: the extension then connects with `wss://` (TLS), the plugin listens on loopback only, and its internal endpoints refuse requests that carry proxy headers, so only the extension endpoint `/ext` is reachable. A paired device key is still required for everything.
 - Credentials never go in URLs: the pairing code and device key are sent inside the WebSocket after it opens.
-- Pairing codes are single use, expire after 5 minutes, and five wrong attempts cancel all open codes. On Telegram the message with the code deletes itself after 5 minutes.
+- Pairing codes are single use, expire after 5 minutes, and five wrong attempts cancel all open codes. The code is the reply to `/chrome pair`, so it stays in that chat's history; it is useless once used or expired.
 - The plugin's internal RPC and the bridge's `/mcp` endpoint accept loopback (same machine) callers only. Both refuse requests from web pages (an `Origin` header) and the bridge refuses foreign `Host` headers (DNS rebinding). The bridge mints pairing codes only for callers holding its local secret file.
 - With a tunnel, route only the path `/ext` to the plugin (see the Cloudflare example in the README).
 - Pairing with a server that is not on this computer shows who will control the browser and warns when the address is neither encrypted nor private.
-- Releases list the SHA-256 of the extension zip; compare it with `shasum -a 256 hermes-chrome-extension.zip` before loading it.
-- Side-panel chat uses your Hermes API server on the same machine; its key is read on the server and never sent to the browser.
-
-## Update helper
-
-The optional update helper (`updater/`, installed with `install.sh` into `~/.hermes-chrome-updater/`) is what makes **Update now** work. It is a small Python program that the browser starts only when the extension asks it to, through Chrome's native messaging. It can do exactly two things:
-
-- **status**: report its version, the extension folder it was set up for, and the version found there.
-- **update**: download the latest Hermes Chrome release and replace the contents of that one folder.
-
-What keeps that narrow:
-
-- **Only the official release.** The release address is fixed in the helper (`api.github.com/repos/whoisdhana/hermes-chrome/releases/latest`), the zip must come from `github.com/whoisdhana/hermes-chrome/releases/download/`, and every request is HTTPS (redirects to plain HTTP are refused). The extension's message cannot name a URL.
-- **Checked before use.** The zip's SHA-256 must equal the digest GitHub publishes for that release asset. No digest, no update. The zip must not contain absolute paths, `..` or symbolic links, its `manifest.json` must be named "Hermes Chrome", and its version must be newer than the installed one.
-- **One folder.** The folder comes only from the helper's own `config.json`, written by the installer from your browser profiles (extensions you loaded unpacked, named "Hermes Chrome") or from `--dir`. It is looked up by the calling extension's id, which the browser passes to the helper, never from the message. The current folder must itself hold Hermes Chrome. The helper writes and deletes only inside that folder; symbolic links found there are removed, never followed. A folder that is a git clone is skipped by the installer.
-- **Only this extension can call it.** Each browser's registration (`NativeMessagingHosts/com.hermes_chrome.updater.json`) allows exactly the Hermes Chrome extension ids found in that browser. Web pages cannot reach it.
-- It runs as you, with no admin rights, keeps no network connection open, and logs errors to `~/.hermes-chrome-updater/updater.log`. The installer itself is fetched over HTTPS from this repository's `main` branch, like the rest of the code.
-
-`bash install.sh --uninstall` (or `curl -fsSL https://raw.githubusercontent.com/whoisdhana/hermes-chrome/main/updater/install.sh | bash -s -- --uninstall`) removes the helper and every registration it added.
+- Side-panel chat uses your Hermes API server on the same machine. The plugin gets its key only through Hermes' secret route (`get_secret`), never from `.env` or other credential files, and never sends it to the browser.
+- At startup the plugin runs `tailscale ip -4` to find a Tailscale address to listen on. It runs no other commands.
 
 ## No telemetry
 
-This project sends no analytics, crash reports or usage data anywhere. The only network traffic is between your browser and your own Hermes, whatever your Hermes already does (model provider, Telegram), and, when you press **Update now**, the update helper fetching the release from GitHub.
+This project sends no analytics, crash reports or usage data anywhere. The only network traffic is between your browser and your own Hermes, between the plugin and this profile's Hermes API server (side-panel chat), and the action checks and extractions your own model answers through Hermes. The plugin makes no calls to Telegram or any other third-party service itself.
 
 ## Revoking access
 

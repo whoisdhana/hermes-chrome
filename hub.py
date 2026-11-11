@@ -13,13 +13,9 @@ import hmac
 import json
 import logging
 import re
-import os
 import secrets
-import shlex
-import shutil
 import socket
 import subprocess
-import sys
 import threading
 import time
 import urllib.error
@@ -35,7 +31,7 @@ log = logging.getLogger("hermes_chrome")
 
 def _plugin_version() -> str:
     try:
-        m = re.search(r"^version:\s*(\S+)", (Path(__file__).parent / "plugin.yaml").read_text(encoding="utf-8"), re.M)
+        m = re.search(r"^version:\s*['\"]?([^'\"\s#]+)", (Path(__file__).parent / "plugin.yaml").read_text(encoding="utf-8"), re.M)
         return m.group(1) if m else ""
     except OSError:
         return ""
@@ -54,7 +50,6 @@ def version_tuple(v: str | None) -> tuple:
 
 
 PLUGIN_VERSION = _plugin_version()
-EXTENSION_DOWNLOAD = "https://github.com/whoisdhana/hermes-chrome/releases/latest/download/hermes-chrome-extension.zip"
 
 AUTO_FORGET_DAYS = 90
 REQUEST_TTL = 2 * 3600  # how long the user's last message counts as "the request" for action checks
@@ -135,12 +130,11 @@ def normalize_code(raw: str) -> str:
 
 class Hub:
     def __init__(self, ctx, *, port: int, advertise_host: str | None, offline_message: str, agent_name: str,
-                 public_url: str | None = None, allow_lan: bool = False, profile: str | None = None, remote_update: bool = True):
+                 public_url: str | None = None, allow_lan: bool = False, profile: str | None = None):
         self.ctx = ctx
         self.port = port
         self.advertise_override = advertise_host
         self.allow_lan = allow_lan
-        self.remote_update = remote_update  # a paired browser may ask this plugin to update itself from the official repo
         self.public_url = ext_url(public_url) if public_url else None  # set: reached through a tunnel, loopback only
         self.offline_message = offline_message
         self.agent_name = agent_name
@@ -365,7 +359,7 @@ class Hub:
             self.current = did
         log.info("hermes-chrome: browser connected: %s (%s %s)", self._name(did), msg.get("browser"), msg.get("version"))
         await ws.send_json({"type": "welcome", "agentName": self.agent_name, "profile": self.profile, "pluginVersion": PLUGIN_VERSION,
-                            "intentCheck": True, "pluginUpdate": self.remote_update})
+                            "intentCheck": True})
         if adopted:  # renamed from chat while this browser was away
             await ws.send_json({"type": "set_name", "name": adopted})
         try:
@@ -381,8 +375,6 @@ class Hub:
                     await ws.send_json({"type": "pong"})
                 elif kind == "intent_check":
                     asyncio.ensure_future(self._intent_reply(ws, data))
-                elif kind == "update_plugin":
-                    asyncio.ensure_future(self._update_plugin(ws, data.get("id")))
                 elif kind == "chat":
                     self.current = did  # a side-panel chat works in the browser it came from
                     task = asyncio.ensure_future(chat.run(self, ws, data))
@@ -514,45 +506,6 @@ class Hub:
         except asyncio.TimeoutError:
             self.pending.pop(seq, None)
             raise RuntimeError(f"{method} timed out after {int(timeout)} s")
-
-    # ------------------------------------------------------------------ self-update (asked for by a paired browser)
-    def _hermes(self) -> list[str]:
-        exe = shutil.which("hermes") or os.path.expanduser("~/.local/bin/hermes")
-        return [exe] + ([] if self.profile in ("default", "custom", "") else ["-p", self.profile])
-
-    async def _hermes_cmd(self, *args: str, timeout: float = 300) -> tuple[int, str]:
-        proc = await asyncio.create_subprocess_exec(*self._hermes(), *args, stdout=asyncio.subprocess.PIPE,
-                                                    stderr=asyncio.subprocess.STDOUT, stdin=asyncio.subprocess.DEVNULL)
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout)
-        return proc.returncode, out.decode(errors="replace")
-
-    def _restart_soon(self) -> None:
-        """Load the new code: restart this profile's gateway gracefully (detached, so it survives this process), and if
-        this process is not that gateway (the dashboard or a CLI holding the browser port), start this process again."""
-        cmd = " ".join(shlex.quote(a) for a in self._hermes() + ["gateway", "restart"])
-        subprocess.Popen(["sh", "-c", f"sleep 2; {cmd}"], start_new_session=True,
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if "gateway" not in sys.argv:
-            self.loop.call_later(4, lambda: os.execv(sys.executable, getattr(sys, "orig_argv", None) or [sys.executable, *sys.argv]))
-
-    async def _update_plugin(self, ws, req_id) -> None:
-        async def reply(**kw):
-            if not ws.closed:
-                await ws.send_json({"type": "plugin_update", "id": req_id, **kw})
-        if not self.remote_update:
-            return await reply(ok=False, error="Updating from the browser is turned off for this Hermes (remote_update: false). Ask your agent instead.")
-        try:
-            code, out = await self._hermes_cmd("plugins", "update", "hermes-chrome")
-        except Exception as e:
-            return await reply(ok=False, error=f"Could not run hermes: {e}")
-        if code != 0:
-            return await reply(ok=False, error="hermes plugins update failed: " + out.strip()[-300:])
-        new = _plugin_version()
-        if version_tuple(new) <= version_tuple(PLUGIN_VERSION):
-            return await reply(**{"ok": True, "from": PLUGIN_VERSION, "to": new, "same": True})
-        log.info("hermes-chrome: updated %s -> %s from the browser; restarting to load it", PLUGIN_VERSION, new)
-        await reply(**{"ok": True, "from": PLUGIN_VERSION, "to": new})
-        self._restart_soon()
 
     # ------------------------------------------------------------------ action checks
     def note_request(self, text) -> None:

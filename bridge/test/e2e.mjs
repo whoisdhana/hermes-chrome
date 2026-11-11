@@ -621,37 +621,22 @@ try {
     const panel = await ctx.newPage();
     await panel.goto(`chrome-extension://${extId}/sidepanel.html`);
     await panel.waitForSelector('#update:not([hidden])');
-    assert.match(await panel.textContent('#update'), /Hermes Chrome 99\.0\.0 is available/);
-    // No update helper on this machine: the one-time setup line with a copy button, plus the manual fallback.
-    assert.deepEqual(await sw.evaluate(() => checkUpdater()), { installed: false, error: '' });
-    assert.match((await sw.evaluate(() => runUpdate())).error, /update helper is not available/);
-    await panel.waitForSelector('#update .cmd code');
-    assert.equal(await panel.$$eval('#update button', (b) => b.map((x) => x.textContent).join('|')), 'Download|Reload extension|Copy');
-    assert.match(await panel.textContent('#update .cmd code'), /^curl -fsSL https:\/\/raw\.githubusercontent\.com\/whoisdhana\/hermes-chrome\/main\/updater\/install\.sh \| bash$/);
-    assert.equal(await panel.$('#update [data-act=update]'), null, 'no Update now without the helper');
+    assert.match(await panel.textContent('#update'), /Hermes Chrome 99\.0\.0 is on your Hermes/);
+    // Notice only: no update helper, no download, no update button; just reload after replacing the folder.
+    for (const gone of ['checkUpdater', 'runUpdate', 'updatePlugin']) {
+      assert.equal(await sw.evaluate((n) => typeof globalThis[n], gone), 'undefined', `${gone} is not in the catalog build`);
+    }
+    assert.equal(await panel.$$eval('#update button', (b) => b.map((x) => x.textContent).join('|')), 'Reload extension');
+    assert.doesNotMatch(await panel.textContent('#update'), /curl|install\.sh|Update now|Download/);
     const opts = await ctx.newPage();
     await opts.goto(`chrome-extension://${extId}/options.html`);
     await opts.waitForSelector('#updateNote:not([hidden])');
-    assert.match(await opts.textContent('#updateNote'), /Update available: Hermes Chrome 99\.0\.0/);
-    await opts.waitForSelector('#setupCmd');
-    assert.match(await opts.textContent('#setupCmd'), /updater\/install\.sh \| bash/);
-    assert.equal(await opts.$('#updateNow'), null);
-    // Helper installed (reply stubbed in the page): one Update now button, progress text, errors inline.
-    await panel.evaluate(() => {
-      const send = chrome.runtime.sendMessage.bind(chrome.runtime);
-      chrome.runtime.sendMessage = (m) => m?.popup === 'updaterStatus' ? Promise.resolve({ installed: true })
-        : m?.popup === 'runUpdate' ? new Promise((r) => setTimeout(() => r({ ok: false, error: 'Already up to date.' }), 500)) : send(m);
-      return chrome.storage.local.get('updateNote').then(({ updateNote }) => renderUpdate(updateNote));
-    });
-    await panel.waitForSelector('#update [data-act=update]');
-    assert.equal(await panel.$$eval('#update button', (b) => b.map((x) => x.textContent).join('|')), 'Update now');
-    await panel.click('#update [data-act=update]');
-    assert.equal(await panel.textContent('#update [data-act=update]'), 'Updating…');
-    await panel.waitForSelector('#update .upd-msg:not([hidden])');
-    assert.equal(await panel.textContent('#update .upd-msg'), 'Already up to date.');
-    assert.equal(await panel.textContent('#update [data-act=update]'), 'Update now');
+    assert.match(await opts.textContent('#updateNote'), /Hermes Chrome 99\.0\.0 is on your Hermes/);
+    assert.equal(await opts.$('#updateNote button'), null, 'Settings offers no update button');
     await sw.evaluate(() => chrome.storage.local.set({ updateNote: versionNote('0.0.1') }));
     await panel.waitForFunction(() => /plugin is older/.test(document.querySelector('#update').textContent));
+    assert.match(await panel.textContent('#update'), /hermes plugins update hermes-chrome/);
+    assert.equal(await panel.$('#update button'), null, 'no Update Hermes plugin button');
     await sw.evaluate(() => chrome.storage.local.set({ updateNote: versionNote(chrome.runtime.getManifest().version) }).then(() => setBadge('on')));
     await panel.waitForSelector('#update', { state: 'hidden' });
     assert.equal(await sw.evaluate(() => chrome.action.getBadgeText({})), '', 'same version: no notice');
