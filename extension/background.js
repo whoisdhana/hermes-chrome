@@ -759,9 +759,13 @@ async function applyIndicators(redrawTabId) {
 }
 
 let pauseTimer = null;
-async function pause(reason) {
+let pausedBy = '';   // 'takeover' when the human clicked or typed in the agent's tab; '' for a pause they asked for
+let lastHuman = 0;   // their last click or key in that tab
+const TAKEOVER_IDLE_MS = 15_000; // a takeover pause ends by itself this long after their last click or key
+async function pause(reason, by = '') {
   if (hud.paused) return;
   hud.paused = true;
+  pausedBy = by;
   hud.pausedReason = reason;
   await setGroupStatus('⏸');
   pushHud();
@@ -771,11 +775,14 @@ async function pause(reason) {
   pauseTimer = setInterval(() => {
     if (!hud.paused) return clearInterval(pauseTimer);
     if (!pauseWaiters.length && busy === 0 && Date.now() - since > 30_000) resume();
+    // They touched the page and then stopped: carry on without waiting for ▶. A pause they pressed stays.
+    else if (pausedBy === 'takeover' && Date.now() - lastHuman > TAKEOVER_IDLE_MS) resume();
   }, 5000);
 }
 
 function resume() {
   hud.paused = false;
+  pausedBy = '';
   hud.pausedReason = '';
   if (lastTabId != null) pageQuiet(lastTabId, 'resetTakeover');
   for (const w of pauseWaiters) w.resolve();
@@ -811,8 +818,10 @@ chrome.commands?.onCommand.addListener((cmd) => {
 
 chrome.runtime.onMessage.addListener((msg, sender) => {
   if (msg?.takeover && sender.tab?.id === lastTabId && !hud.paused) {
-    settings().then((s) => pause(`You took over, so ${s.agentName} paused. Press ▶ when it can continue.`));
+    lastHuman = Date.now();
+    settings().then((s) => pause(`You took over, so ${s.agentName} paused. It continues by itself ${TAKEOVER_IDLE_MS / 1000} seconds after your last click or key, or press ▶.`, 'takeover'));
   }
+  if (msg?.humanActive && sender.tab?.id === lastTabId) lastHuman = Date.now();
   if (msg?.hud === 'pause') pause('Paused. Press ▶ to let it continue.');
   if (msg?.hud === 'resume') resume();
   if (msg?.hud === 'stop') { if (hud.recording) stopRecording(); else haltTask(); }
@@ -1466,7 +1475,8 @@ async function handle({ id, method, params }) {
   clearTimeout(idleTimer);
   markActive();
   try {
-    if (!['tabs_list', 'plan', 'report'].includes(method)) await waitWhilePaused(); // human has the wheel
+    // Human has the wheel: anything that touches the page waits. Looking does not fight them for it.
+    if (!['tabs_list', 'plan', 'report', 'read_page', 'find', 'get_text', 'screenshot'].includes(method)) await waitWhilePaused();
     if (method !== 'handoff') setGroupStatus('⏳');
     pushHud();
     reply({ result: await METHODS[method](params || {}) });

@@ -426,9 +426,28 @@ try {
     const pending = call('press_key', { tabId, key: 'Tab', why: 'Next field' });
     await sleep(800);
     await p.screenshot({ path: path.join(SHOTS, 'hc-paused.png') });
+    assert.ok((await call('get_text', { tabId })).text.length > 0, 'reading does not wait for the pause');
     await sw.evaluate(() => resume());
     assert.match((await pending).text, /pressed Tab/);
     assert.ok(Date.now() - t0 >= 800, 'the call waited while paused');
+  });
+  await step('takeover pause ends by itself once the human stops; a pause they pressed stays', async () => {
+    const p = testPage();
+    await call('plan', { done: 2 });
+    await sleep(800); // the previous step's key press has ended, so the next click is the human's
+    await p.mouse.click(600, 500);
+    for (let i = 0; i < 20 && !(await sw.evaluate(() => hud.paused)); i++) await sleep(100);
+    assert.equal(await sw.evaluate(() => hud.paused), true, 'paused after takeover');
+    await sw.evaluate(() => { lastHuman = Date.now() - 14_000; }); // as if their last click was 14 s ago
+    const t0 = Date.now();
+    assert.match((await call('press_key', { tabId, key: 'Tab', why: 'Next field' })).text, /pressed Tab/);
+    assert.ok(Date.now() - t0 < 12_000, `continued by itself (${Date.now() - t0} ms)`);
+    assert.equal(await sw.evaluate(() => hud.paused), false);
+    await sw.evaluate(() => pause('Paused. Press ▶ to let it continue.'));
+    await sw.evaluate(() => { lastHuman = 0; });
+    await sleep(6000);
+    assert.equal(await sw.evaluate(() => hud.paused), true, 'a pause the user pressed does not end by itself');
+    await sw.evaluate(() => resume());
   });
   await step('activity timeline records labelled steps with snapshots', async () => {
     const { activity } = await sw.evaluate(() => chrome.storage.local.get('activity'));

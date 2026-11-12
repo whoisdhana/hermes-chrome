@@ -332,11 +332,16 @@
   // While the agent works in this tab, a real click or key press that is not the agent's own (it
   // sets `acting` around every injected event) means the human grabbed the wheel: pause the agent.
   // Moving the mouse or scrolling to read does not count.
-  let acting = false, actingDepth = 0, watching = false, tookOver = false;
+  let acting = false, actingDepth = 0, watching = false, tookOver = false, lastBeat = 0;
   function onHumanInput(e) {
-    if (!watching || acting || tookOver || !e.isTrusted || e.composedPath?.().includes(host)) return;
+    if (!watching || acting || !e.isTrusted || e.composedPath?.().includes(host)) return;
     if (e.type === 'keydown' && ['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return; // e.g. the ⌥⇧. shortcut itself
+    if (tookOver) { // still at it: tell the background now and then, so the agent waits until the human stops
+      if (Date.now() - lastBeat > 2000) { lastBeat = Date.now(); chrome.runtime.sendMessage({ humanActive: true }).catch(() => {}); }
+      return;
+    }
     tookOver = true;
+    lastBeat = Date.now();
     ui?.cursor.classList.add('yield');
     chrome.runtime.sendMessage({ takeover: true, by: e.type }).catch(() => {});
   }
