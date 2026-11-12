@@ -4,6 +4,12 @@ You are a Hermes agent. Your user asked you to install or update Hermes Chrome s
 
 If you run as a named profile (not the default one), put `-p <your profile>` right after `hermes` in every command below.
 
+## Before you start
+
+- **One browser profile pairs with one agent.** If the user already paired their browser with another agent, pairing it with you takes it away from that agent. Ask which browser you get: another Chrome profile, another browser (Brave, Edge), or a browser on another computer. Each agent can have several browsers; a browser has one agent.
+- **You and the browser can be on different computers.** The browser only has to reach this machine (step 3).
+- **Only you get the browser.** Other profiles on this machine stay without it unless the user asks each of them to install it too.
+
 **Updating?** If Hermes Chrome is already installed and the user asked to update it: do step 1 (it updates the plugin), skip steps 2 to 4 (their settings stay), do step 5, and send the **update checklist** instead of the install checklist. Then do step 6 if the update helper is not installed yet. Report the old and new version (`hermes plugins list` before and after).
 
 ## 1. Install or update the plugin
@@ -24,7 +30,7 @@ Use your own name, so the cursor and tab group carry it:
 hermes config set plugins.entries.hermes-chrome.settings.agent_name "<your name>"
 ```
 
-If another profile on this machine already uses Hermes Chrome, give this one its own port: `hermes config set plugins.entries.hermes-chrome.settings.port 8799` (8800, 8801… for more).
+Leave the port alone. The default profile uses 8798 and every named profile gets its own port from its name (8800 to 8999), also when one gateway serves several profiles (needs Hermes Chrome 0.8.7 or newer). Set `plugins.entries.hermes-chrome.settings.port` only if `/chrome status` reports a port clash after the restart; the message names the port to use.
 
 ## 3. How will the user's Chrome reach this machine?
 
@@ -65,6 +71,8 @@ hermes gateway status
 ```
 
 - **Gateway running** (Telegram, Discord and so on): send the user the checklist below first, then restart in the background so your message gets out. If that is not possible here, ask the user to send `/restart` instead.
+
+  If this gateway serves several profiles (`multiplex_profiles: true` in the main `config.yaml`), the restart interrupts every agent on it for a minute or two. Say so and wait for the user's yes before restarting.
 
   ```bash
   nohup sh -c 'sleep 15; hermes gateway restart' >/dev/null 2>&1 &
@@ -112,7 +120,16 @@ An unpacked extension cannot replace its own files, so **Update now** in the ext
 
 Running it again is safe (it refreshes the setup); `... | bash -s -- --uninstall` removes it.
 
+## After the restart: check it took
+
+- `hermes plugins list` shows `hermes-chrome` as enabled, with the version you expect.
+- `hermes chrome status` (or `/chrome status` in chat) answers. Before pairing it says no browser is connected; that is correct.
+- After the user pairs, it names their browser. Tell the user in one line that it worked, and which browser you are connected to.
+
 ## If something goes wrong
+
+- A named profile does not list `hermes-chrome` although the main profile has it: plugins are per profile. Run the install command from step 1 with `-p <your profile>`.
+- The side panel shows another agent's name or an old chat after pairing: update the extension to 0.8.7 or newer, then press the new-chat icon once.
 
 - `cd / && hermes plugins doctor hermes-chrome` checks the installed plugin (run it from `/`: in a folder that contains a `hermes-chrome` directory, doctor checks that folder instead).
 - `/chrome status` shows whether a browser is connected and the address codes point to.
