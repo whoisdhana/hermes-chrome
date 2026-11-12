@@ -135,8 +135,10 @@ def normalize_code(raw: str) -> str:
 
 class Hub:
     def __init__(self, ctx, *, port: int, advertise_host: str | None, offline_message: str, agent_name: str,
-                 public_url: str | None = None, allow_lan: bool = False, profile: str | None = None, remote_update: bool = True):
+                 public_url: str | None = None, allow_lan: bool = False, profile: str | None = None, remote_update: bool = True,
+                 home=None):
         self.ctx = ctx
+        self.home = home  # this profile's Hermes home; the hub thread works in it (a shared gateway serves several)
         self.port = port
         self.advertise_override = advertise_host
         self.allow_lan = allow_lan
@@ -162,7 +164,8 @@ class Hub:
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
-        threading.Thread(target=self._run, name="hermes-chrome-hub", daemon=True).start()
+        run = chat.bound(self.home, self._run) if self.home else self._run
+        threading.Thread(target=run, name="hermes-chrome-hub", daemon=True).start()
 
     def _run(self) -> None:
         self.loop = asyncio.new_event_loop()

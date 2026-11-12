@@ -21,7 +21,41 @@ MAX_FILE = 25 * 1024 * 1024
 
 
 def _hermes_home() -> Path:
-    return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    """Home of the profile being served. A gateway that serves several profiles in one process switches homes with a
+    context-local override, not the HERMES_HOME variable, so ask Hermes when it can tell."""
+    try:
+        from hermes_constants import get_hermes_home
+        return Path(get_hermes_home())
+    except Exception:
+        return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+
+
+def _routed() -> bool:
+    """True when this profile is not the one the process was started for (a shared gateway serving it)."""
+    try:
+        from hermes_constants import get_process_hermes_home
+        return Path(get_process_hermes_home()).resolve() != _hermes_home().resolve()
+    except Exception:
+        return False
+
+
+def bound(home, fn):
+    """fn, run with `home` as the active Hermes home. For threads the plugin starts itself: they do not inherit the
+    profile the gateway was serving, and would otherwise read the main profile's state and .env."""
+    def run(*args, **kwargs):
+        token = None
+        try:
+            from hermes_constants import set_hermes_home_override
+            token = set_hermes_home_override(str(home))
+        except Exception:
+            pass
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            if token is not None:
+                from hermes_constants import reset_hermes_home_override
+                reset_hermes_home_override(token)
+    return run
 
 
 def _dotenv(name: str) -> str:
@@ -34,13 +68,19 @@ def _dotenv(name: str) -> str:
     return ""
 
 
+def _env(name: str) -> str:
+    """A profile setting: the process environment, else the profile's .env. In a shared gateway the environment
+    belongs to the main profile, so another profile reads only its own .env."""
+    return _dotenv(name) if _routed() else (os.environ.get(name) or _dotenv(name))
+
+
 def api_target() -> tuple[str, str]:
     """(base URL, key) of this profile's API server, from the environment or the profile's .env."""
-    host = os.environ.get("API_SERVER_HOST") or _dotenv("API_SERVER_HOST") or "127.0.0.1"
+    host = _env("API_SERVER_HOST") or "127.0.0.1"
     if host in ("0.0.0.0", "::", ""):
         host = "127.0.0.1"
-    port = os.environ.get("API_SERVER_PORT") or _dotenv("API_SERVER_PORT") or "8642"
-    key = os.environ.get("API_SERVER_KEY") or _dotenv("API_SERVER_KEY")
+    port = _env("API_SERVER_PORT") or "8642"
+    key = _env("API_SERVER_KEY")
     return f"http://{host}:{port}", key
 
 

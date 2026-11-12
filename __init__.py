@@ -12,6 +12,7 @@ from pathlib import Path
 import threading
 
 from . import recordings, telegram_note
+from .chat import _routed as chat_routed, bound as chat_bound
 from .hub import CODE_TTL, EXTENSION_DOWNLOAD, PLUGIN_VERSION, Hub, default_port, version_tuple
 from .tools import TOOLS, make_handler
 
@@ -24,11 +25,21 @@ HELP = """/chrome_pair      new pairing code for the Hermes Chrome extension (5 
 /chrome revoke <name or id | all>   unpair a browser"""
 
 
-def profile_of(ctx) -> str:
-    """Which Hermes profile this process serves. HERMES_HOME is the ground truth (…/profiles/<name> for a named
+def home_of() -> str:
+    """Hermes home of the profile this plugin instance is being loaded for. Hermes knows (a shared gateway that serves
+    several profiles switches homes without touching the HERMES_HOME variable); older versions only have the variable."""
+    try:
+        from hermes_constants import get_hermes_home
+        return str(get_hermes_home())
+    except Exception:
+        return os.environ.get("HERMES_HOME", "")
+
+
+def profile_of(ctx, home: str | None = None) -> str:
+    """Which Hermes profile this plugin instance serves. The home is the ground truth (…/profiles/<name> for a named
     profile); ctx.profile_name has been seen to say "default" inside other profiles' gateways, which made them all
     claim the default profile's browser port."""
-    m = re.search(r"/profiles/([^/]+)/*$", os.environ.get("HERMES_HOME", ""))
+    m = re.search(r"/profiles/([^/]+)/*$", home_of() if home is None else home)
     return m.group(1) if m else (ctx.profile_name or "default")
 
 
@@ -68,7 +79,7 @@ def _plugins_block(text: str) -> tuple[list[str] | None, dict]:
     return enabled, settings
 
 
-def own_plugin_config(profile: str) -> dict | None:
+def own_plugin_config(profile: str, home: str | None = None) -> dict | None:
     """For a named profile, this plugin's part of the profile's OWN config.yaml: whether it is enabled there and its
     settings. Hermes can load plugins installed in the main ~/.hermes into every profile and hand them the main
     profile's settings, so a profile that never enabled Hermes Chrome would otherwise run it on the main port.
@@ -76,7 +87,7 @@ def own_plugin_config(profile: str) -> dict | None:
     if profile in ("default", "custom", ""):
         return None
     try:
-        with open(os.path.join(os.environ.get("HERMES_HOME", ""), "config.yaml"), encoding="utf-8") as f:
+        with open(os.path.join(home_of() if home is None else home, "config.yaml"), encoding="utf-8") as f:
             enabled, settings = _plugins_block(f.read())
     except OSError:
         return None
@@ -84,8 +95,10 @@ def own_plugin_config(profile: str) -> dict | None:
 
 
 def register(ctx):
-    profile = profile_of(ctx)
-    own = own_plugin_config(profile)
+    home = home_of()
+    routed = chat_routed()
+    profile = profile_of(ctx, home)
+    own = own_plugin_config(profile, home)
     if own and own["has_list"] and not own["enabled"]:
         return  # this profile did not enable Hermes Chrome: no browser tools, no port
     named = profile not in ("default", "custom", "")
@@ -100,6 +113,7 @@ def register(ctx):
         offline_message=ctx.get_config("offline_message", default="Browser not available"),
         agent_name=ctx.get_config("agent_name", default=None) or ("Hermes" if profile in ("default", "custom") else profile.title()),
         profile=profile,
+        home=home if routed else None,  # only a profile served by a shared gateway needs its threads pinned
         remote_update=bool(ctx.get_config("remote_update", default=True)),
     )
     hub.start()
@@ -152,7 +166,7 @@ def register(ctx):
     def _resume_deletes():  # owner only: clean up pairing messages left by a restart
         if hub.ready.wait(30) and hub.owner:
             telegram_note.resume(ctx.state)
-    threading.Thread(target=_resume_deletes, daemon=True).start()
+    threading.Thread(target=chat_bound(home, _resume_deletes) if routed else _resume_deletes, daemon=True).start()
     ctx.register_cli_command("chrome", "Pair and manage the Hermes Chrome extension", setup_fn=_setup_cli,
                              handler_fn=lambda args: print(command(hub, " ".join([args.action, *args.rest]), cli=True)))
     ctx.register_skill("browser", Path(__file__).parent / "skill")

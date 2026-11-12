@@ -586,6 +586,49 @@ session_reset:
                 os.environ["HERMES_HOME"] = old
 
 
+    def test_shared_gateway_serves_two_profiles(self):
+        """One process serving several profiles: Hermes switches homes with a context-local override while HERMES_HOME
+        still names the main profile. Each profile's plugin must follow the override, in its own threads too."""
+        try:
+            import hermes_constants as hc
+        except ImportError:
+            self.skipTest("needs Hermes (hermes_constants)")
+        chat_mod = importlib.import_module("hermes_chrome.chat")
+        root = tempfile.mkdtemp()
+        prof = os.path.join(root, "profiles", "vulcan")
+        os.makedirs(prof)
+        with open(os.path.join(root, "config.yaml"), "w") as f:
+            f.write("plugins:\n  enabled:\n    - hermes-chrome\n  entries:\n    hermes-chrome:\n      settings:\n        port: 8798\n")
+        with open(os.path.join(prof, "config.yaml"), "w") as f:
+            f.write("plugins:\n  enabled:\n    - hermes-chrome\n")
+        with open(os.path.join(prof, ".env"), "w") as f:
+            f.write("TELEGRAM_BOT_TOKEN=vulcan-token\n")
+        old = {k: os.environ.get(k) for k in ("HERMES_HOME", "TELEGRAM_BOT_TOKEN")}
+        os.environ["HERMES_HOME"], os.environ["TELEGRAM_BOT_TOKEN"] = root, "main-token"
+        token = hc.set_hermes_home_override(prof)
+        try:
+            ctx = FakeCtx(tempfile.mkdtemp(), {"port": 8798, "agent_name": "Delulu"})  # main profile's settings, handed down
+            ctx.profile_name = "default"
+            self.assertEqual(plugin.profile_of(ctx), "vulcan")
+            plugin.register(ctx)
+            hub = ctx.tools["chrome_open"].__closure__[0].cell_contents
+            self.assertEqual((hub.profile, hub.port), ("vulcan", hub_mod.default_port("vulcan")), "not the main profile's 8798")
+            self.assertEqual(Path(hub.home), Path(prof))
+            self.assertEqual(chat_mod._env("TELEGRAM_BOT_TOKEN"), "vulcan-token", "its own bot, not the main profile's")
+        finally:
+            hc.reset_hermes_home_override(token)
+        try:
+            self.assertEqual(plugin.profile_of(ctx), "default", "without the override: the process's own profile")
+            self.assertEqual(chat_mod._env("TELEGRAM_BOT_TOKEN"), "main-token")
+            seen = []
+            t = threading.Thread(target=chat_mod.bound(prof, lambda: seen.append((chat_mod._hermes_home(), chat_mod._env("TELEGRAM_BOT_TOKEN")))))
+            t.start(); t.join()
+            self.assertEqual(seen, [(Path(prof), "vulcan-token")], "the plugin's own threads work in the profile's home")
+        finally:
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
+
 class PluginSelfUpdateTest(unittest.TestCase):
     """A paired browser asks the plugin to update itself; the plugin runs `hermes plugins update` and restarts."""
     PORT = 18791

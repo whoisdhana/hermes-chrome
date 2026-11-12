@@ -14,13 +14,18 @@ import time
 import urllib.request
 import uuid
 
-from .chat import _dotenv
+from .chat import _env, _hermes_home, _routed, bound
 
 log = logging.getLogger("hermes_chrome")
 
 
+def _in_profile(fn):
+    """fn for a timer thread: pinned to this profile's home when a shared gateway serves it (threads do not inherit it)."""
+    return bound(_hermes_home(), fn) if _routed() else fn
+
+
 def _token() -> str:
-    return os.environ.get("TELEGRAM_BOT_TOKEN") or _dotenv("TELEGRAM_BOT_TOKEN")
+    return _env("TELEGRAM_BOT_TOKEN")
 
 
 def _bot(method: str, payload: dict) -> dict:
@@ -117,7 +122,7 @@ def schedule_delete(state, chat_id, message_id, at: float) -> None:
     pending = list(state.get("pending_deletes", default=[]) or [])
     pending.append({"chat_id": chat_id, "message_id": message_id, "at": at})
     state.set("pending_deletes", pending)
-    timer = threading.Timer(max(0.0, at - time.time()), _delete_due, args=(state,))
+    timer = threading.Timer(max(0.0, at - time.time()), _in_profile(_delete_due), args=(state,))
     timer.daemon = True
     timer.start()
 
@@ -143,6 +148,6 @@ def resume(state) -> None:
         return
     _delete_due(state)
     for p in state.get("pending_deletes", default=[]) or []:
-        t = threading.Timer(max(0.0, p["at"] - time.time()), _delete_due, args=(state,))
+        t = threading.Timer(max(0.0, p["at"] - time.time()), _in_profile(_delete_due), args=(state,))
         t.daemon = True
         t.start()
