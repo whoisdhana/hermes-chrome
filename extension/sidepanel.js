@@ -627,9 +627,16 @@ function renderUpdate(n) {
 chrome.storage.onChanged.addListener((c, area) => { if (area === 'local' && c.updateNote) renderUpdate(c.updateNote.newValue); });
 // Pairing or unpairing while the panel is open: switch between the "Pair this browser" screen and the chat at once.
 chrome.storage.onChanged.addListener((c, area) => {
-  if (area !== 'local' || !('deviceKey' in c)) return;
-  paired = !!c.deviceKey.newValue;
-  if (!entries.length) emptyState();
+  if (area !== 'local') return;
+  if (c.agentName) { // paired with another agent: the panel is theirs now
+    agentName = c.agentName.newValue || 'Hermes';
+    $('title').textContent = agentName;
+    input.placeholder = `Ask ${agentName}…`;
+  }
+  if ('deviceKey' in c) paired = !!c.deviceKey.newValue;
+  // Unpaired, or paired with a different Hermes: the old agent's conversation does not carry over.
+  if (c.deviceId && c.deviceId.oldValue && c.deviceId.oldValue !== c.deviceId.newValue) return newChat();
+  if (('deviceKey' in c || c.agentName) && !entries.length) emptyState();
 });
 
 (async () => {
